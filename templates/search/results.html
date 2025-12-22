@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+
+{% block title %}Search: {{ query }} - Prism{% endblock %}
+
+{% block content %}
+<div class="container">
+    <header class="topic-header">
+        <h1>Search Results</h1>
+        {% if query %}
+        <p class="text-muted">Showing results for "{{ query }}"</p>
+        {% endif %}
+    </header>
+
+    <!-- Search Bar -->
+    <div class="search-container mb-4">
+        <form action="{% url 'web:search' %}" method="get">
+            <input
+                type="text"
+                name="q"
+                value="{{ query }}"
+                placeholder="Search topics..."
+                class="search-input"
+                hx-get="{% url 'web:htmx-search' %}"
+                hx-trigger="keyup changed delay:300ms"
+                hx-target="#search-results"
+                autocomplete="off"
+            >
+            <div id="search-results" class="search-results"></div>
+        </form>
+    </div>
+
+    {% if topics %}
+    <p class="text-muted mb-2">Found {{ page_obj.paginator.count }} topic{{ page_obj.paginator.count|pluralize }}</p>
+
+    <div class="topic-grid">
+        {% for topic in topics %}
+        <a href="{% url 'web:topic-detail' slug=topic.slug %}" class="topic-card">
+            <h3>{{ topic.title }}</h3>
+            <div class="topic-meta">
+                <span>{{ topic.article_count }} articles</span>
+                <span>{{ topic.source_count }} sources</span>
+            </div>
+            {% if topic.keywords %}
+            <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                {{ topic.keywords|slice:":5"|join:", " }}
+            </p>
+            {% endif %}
+        </a>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+    <nav class="pagination mt-4 text-center">
+        {% if page_obj.has_previous %}
+        <a href="?q={{ query }}&page={{ page_obj.previous_page_number }}">Previous</a>
+        {% endif %}
+        <span class="text-muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_next %}
+        <a href="?q={{ query }}&page={{ page_obj.next_page_number }}">Next</a>
+        {% endif %}
+    </nav>
+    {% endif %}
+
+    {% elif query %}
+    <div class="empty-state">
+        <h3>No results found</h3>
+        <p>No topics found for "{{ query }}". Try a different search term.</p>
+    </div>
+
+    {% else %}
+    <div class="empty-state">
+        <h3>Enter a search term</h3>
+        <p>Type at least 2 characters to search for topics.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

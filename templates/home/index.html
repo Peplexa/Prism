@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<section class="hero">
+    <div class="hero-content">
+        <h1>See Every Side of the Story</h1>
+        <p>Analyze news bias across multiple sources and get balanced perspectives on current events.</p>
+
+        <!-- Search Bar -->
+        <div class="search-container">
+            <form action="{% url 'web:search' %}" method="get">
+                <input
+                    type="text"
+                    name="q"
+                    placeholder="Search topics or paste an article URL..."
+                    class="search-input"
+                    hx-get="{% url 'web:htmx-search' %}"
+                    hx-trigger="keyup changed delay:300ms"
+                    hx-target="#search-results"
+                    autocomplete="off"
+                >
+                <div id="search-results" class="search-results"></div>
+            </form>
+        </div>
+    </div>
+</section>
+
+<!-- Trending Topics -->
+{% if trending_topics %}
+<section class="container">
+    <h2 class="section-title">Trending Stories</h2>
+    <div class="topic-grid">
+        {% for topic in trending_topics %}
+        <a href="{% url 'web:topic-detail' slug=topic.slug %}" class="topic-card">
+            <h3>{{ topic.title }}</h3>
+            <div class="topic-meta">
+                <span>{{ topic.article_count }} articles</span>
+                <span>{{ topic.source_count }} sources</span>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+{% else %}
+<section class="container">
+    <div class="empty-state">
+        <h3>No trending stories yet</h3>
+        <p>Stories will appear here once articles are collected and analyzed.</p>
+    </div>
+</section>
+{% endif %}
+{% endblock %}

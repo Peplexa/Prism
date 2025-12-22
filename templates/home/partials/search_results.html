@@ -1,0 +1,19 @@
+{% if is_url %}
+<div class="search-result-item">
+    <strong>Analyze this article</strong>
+    <p class="text-muted">{{ query|truncatechars:50 }}</p>
+</div>
+{% endif %}
+
+{% for topic in topics %}
+<a href="{% url 'web:topic-detail' slug=topic.slug %}" class="search-result-item">
+    <strong>{{ topic.title }}</strong>
+    <p class="text-muted">{{ topic.article_count }} articles from {{ topic.source_count }} sources</p>
+</a>
+{% empty %}
+{% if not is_url %}
+<div class="search-result-item">
+    <p class="text-muted">No topics found for "{{ query }}"</p>
+</div>
+{% endif %}
+{% endfor %}

@@ -1,0 +1,41 @@
+# Django Core
+Django>=4.2,<5.0
+djangorestframework>=3.14
+django-cors-headers>=4.3
+django-filter>=23.5
+django-environ>=0.11
+
+# Database
+psycopg2-binary>=2.9
+
+# Celery & Redis
+celery>=5.3
+redis>=5.0
+django-celery-beat>=2.5
+django-celery-results>=2.5
+
+# HTMX Integration
+django-htmx>=1.17
+
+# Scraping & Content Extraction
+trafilatura>=1.6
+feedparser>=6.0
+beautifulsoup4>=4.12
+requests>=2.31
+lxml>=5.1
+
+# ML/NLP for Clustering
+sentence-transformers>=2.2
+scikit-learn>=1.3
+hdbscan>=0.8
+numpy>=1.24
+
+# Utilities
+python-slugify>=8.0
+python-dateutil>=2.8
+
+# Testing
+pytest>=7.4
+pytest-django>=4.7
+pytest-cov>=4.1
+factory-boy>=3.3

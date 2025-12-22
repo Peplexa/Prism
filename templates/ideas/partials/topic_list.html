@@ -1,0 +1,13 @@
+{% for topic in topics %}
+<a href="{% url 'web:topic-detail' slug=topic.slug %}" class="topic-card">
+    <h3>{{ topic.title }}</h3>
+    <div class="topic-meta">
+        <span>{{ topic.article_count }} articles</span>
+        <span>{{ topic.source_count }} sources</span>
+    </div>
+</a>
+{% empty %}
+<div class="empty-state">
+    <p>No topics found.</p>
+</div>
+{% endfor %}

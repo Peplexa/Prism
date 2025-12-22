@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ article.title }} - Prism{% endblock %}
+
+{% block content %}
+<div class="container">
+    <!-- Article Header -->
+    <header class="topic-header">
+        <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+            <span class="article-source-badge bias-{{ article.source.known_bias }}">
+                {{ article.source.get_known_bias_display }}
+            </span>
+            <a href="{{ article.source.website_url }}" target="_blank" class="text-muted">
+                {{ article.source.name }}
+            </a>
+        </div>
+
+        <h1>{{ article.title }}</h1>
+
+        <div class="article-meta mt-2">
+            {% if article.author %}<strong>{{ article.author }}</strong> · {% endif %}
+            {% if article.published_at %}{{ article.published_at|date:"F d, Y at g:i a" }}{% endif %}
+            {% if article.word_count %} · {{ article.word_count }} words{% endif %}
+        </div>
+
+        <div class="mt-2">
+            <a href="{{ article.url }}" target="_blank" class="text-muted" style="font-size: 0.875rem;">
+                View original article →
+            </a>
+        </div>
+    </header>
+
+    <!-- Article Content -->
+    <section class="mt-4">
+        {% if article.summary %}
+        <div style="background: var(--color-surface); padding: 1.5rem; border-radius: var(--radius); margin-bottom: 2rem; border-left: 4px solid var(--color-primary);">
+            <strong>Summary</strong>
+            <p class="mt-1">{{ article.summary }}</p>
+        </div>
+        {% endif %}
+
+        {% if article.content %}
+        <div class="article-full-content" style="line-height: 1.8; max-width: 800px;">
+            {{ article.content|linebreaks }}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>Full article content not yet extracted.</p>
+            <a href="{{ article.url }}" target="_blank">Read on {{ article.source.name }} →</a>
+        </div>
+        {% endif %}
+    </section>
+
+    <!-- Related Articles -->
+    {% if related_articles %}
+    <section class="mt-4" style="border-top: 1px solid var(--color-border); padding-top: 2rem;">
+        <h2 class="section-title">Related Coverage</h2>
+        <div class="article-list">
+            {% for related in related_articles %}
+            <a href="{% url 'web:article-detail' pk=related.pk %}" class="article-card">
+                <div class="article-source">
+                    <span class="article-source-badge bias-{{ related.source.known_bias }}">
+                        {{ related.source.name|slice:":3"|upper }}
+                    </span>
+                </div>
+                <div class="article-content">
+                    <h4>{{ related.title }}</h4>
+                    <div class="article-meta">
+                        {{ related.source.name }} · {{ related.published_at|date:"M d" }}
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}
