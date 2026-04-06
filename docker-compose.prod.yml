@@ -1,0 +1,40 @@
+version: '3.8'
+
+# Production overrides — use with:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  web:
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"
+    ports:
+      - "80:8000"
+    volumes: []  # No source mount in production
+    environment:
+      - DEBUG=0
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - DATABASE_URL=postgres://prism:${DB_PASSWORD}@db:5432/prism
+      - REDIS_URL=redis://redis:6379/0
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  celery_worker:
+    command: celery -A config worker -l INFO --concurrency=4
+    volumes: []
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - DATABASE_URL=postgres://prism:${DB_PASSWORD}@db:5432/prism
+      - REDIS_URL=redis://redis:6379/0
+
+  celery_beat:
+    command: celery -A config beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes: []
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - DATABASE_URL=postgres://prism:${DB_PASSWORD}@db:5432/prism
+      - REDIS_URL=redis://redis:6379/0

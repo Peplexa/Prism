@@ -4,24 +4,24 @@ from .models import Source, Article
 
 @admin.register(Source)
 class SourceAdmin(admin.ModelAdmin):
-    list_display = ['name', 'known_bias', 'discovery_method', 'is_active', 'last_scraped_at']
-    list_filter = ['known_bias', 'discovery_method', 'is_active']
-    search_fields = ['name', 'website_url']
+    list_display = ['name', 'known_bias', 'event_registry_uri', 'is_active']
+    list_filter = ['known_bias', 'is_active']
+    search_fields = ['name', 'website_url', 'event_registry_uri']
     prepopulated_fields = {'slug': ('name',)}
-    readonly_fields = ['last_scraped_at', 'created_at', 'updated_at']
+    readonly_fields = ['created_at', 'updated_at']
 
     fieldsets = (
         (None, {
             'fields': ('name', 'slug', 'website_url', 'logo_url')
         }),
-        ('Discovery Settings', {
-            'fields': ('discovery_method', 'discovery_url', 'article_link_selector')
+        ('Event Registry', {
+            'fields': ('event_registry_uri',)
         }),
         ('Metadata', {
-            'fields': ('known_bias', 'is_active', 'scrape_frequency_hours')
+            'fields': ('known_bias', 'is_active')
         }),
         ('Timestamps', {
-            'fields': ('last_scraped_at', 'created_at', 'updated_at'),
+            'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )
@@ -29,10 +29,10 @@ class SourceAdmin(admin.ModelAdmin):
 
 @admin.register(Article)
 class ArticleAdmin(admin.ModelAdmin):
-    list_display = ['title_short', 'source', 'status', 'published_at', 'word_count']
-    list_filter = ['status', 'source', 'published_at']
+    list_display = ['title_short', 'source', 'status', 'is_wire_content', 'published_at', 'word_count', 'sentiment']
+    list_filter = ['status', 'source', 'is_wire_content', 'published_at']
     search_fields = ['title', 'content', 'url']
-    readonly_fields = ['word_count', 'created_at', 'updated_at']
+    readonly_fields = ['word_count', 'event_registry_uri', 'sentiment', 'created_at', 'updated_at']
     date_hierarchy = 'published_at'
 
     fieldsets = (
@@ -43,7 +43,11 @@ class ArticleAdmin(admin.ModelAdmin):
             'fields': ('summary', 'content', 'word_count')
         }),
         ('Processing', {
-            'fields': ('status', 'error_message', 'published_at')
+            'fields': ('status', 'is_wire_content', 'published_at')
+        }),
+        ('Event Registry', {
+            'fields': ('event_registry_uri', 'sentiment'),
+            'classes': ('collapse',)
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),

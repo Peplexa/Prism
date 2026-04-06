@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Server Error - Prism{% endblock %}
+{% block content %}
+<div class="container">
+    <div class="empty-state">
+        <h3>Something Went Wrong</h3>
+        <p>An unexpected error occurred. Please try again later.</p>
+        <a href="{% url 'web:home' %}">Back to Home</a>
+    </div>
+</div>
+{% endblock %}

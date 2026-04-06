@@ -16,16 +16,10 @@ app.autodiscover_tasks()
 
 # Celery Beat schedule
 app.conf.beat_schedule = {
-    # Scrape all sources every hour
-    'scrape-all-sources': {
-        'task': 'apps.articles.tasks.scrape_all_sources',
-        'schedule': crontab(minute=0),  # Every hour at :00
-    },
-
-    # Run clustering every 30 minutes
-    'cluster-articles': {
-        'task': 'apps.topics.tasks.cluster_recent_articles',
-        'schedule': crontab(minute='*/30'),
+    # Poll Event Registry for new events every 5 minutes
+    'fetch-events': {
+        'task': 'apps.articles.tasks.fetch_events',
+        'schedule': crontab(minute='*/5'),
     },
 
     # Update trending scores every 15 minutes
@@ -34,16 +28,28 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute='*/15'),
     },
 
-    # Cleanup failed articles daily at 3am
-    'cleanup-failed': {
-        'task': 'apps.articles.tasks.cleanup_failed_articles',
+    # Cleanup old topics daily at 3am
+    'cleanup-old-topics': {
+        'task': 'apps.articles.tasks.cleanup_old_topics',
         'schedule': crontab(hour=3, minute=0),
     },
 
-    # Merge similar topics daily at 4am
-    'merge-topics': {
-        'task': 'apps.topics.tasks.merge_similar_topics',
-        'schedule': crontab(hour=4, minute=0),
+    # Backfill analysis for unanalyzed articles every hour
+    'analyze-unanalyzed-articles': {
+        'task': 'apps.analysis.tasks.analyze_unanalyzed_articles',
+        'schedule': crontab(minute=30),
+    },
+
+    # Build consensus pools for topics with enough sources (every 30 min)
+    'build-consensus-pools': {
+        'task': 'apps.consensus.tasks.build_pools_for_ready_topics',
+        'schedule': crontab(minute='*/30'),
+    },
+
+    # Generate neutral summaries for topics with completed pools (hourly at :15)
+    'generate-missing-summaries': {
+        'task': 'apps.summary.tasks.generate_missing_summaries',
+        'schedule': crontab(minute=15),
     },
 }
 

@@ -1,0 +1,1331 @@
+{% extends 'base.html' %}
+{% load report_filters %}
+
+{% block title %}Media Comparison Report: {{ topic.title }} - Prism{% endblock %}
+
+{% block extra_css %}
+<style>
+    .report-section {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius);
+        padding: 2rem;
+        margin-bottom: 2rem;
+    }
+    .report-section h2 {
+        font-size: 1.25rem;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+    }
+
+    /* CSS bar chart */
+    .bar-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 1rem;
+        gap: 1rem;
+    }
+    .bar-label {
+        flex: 0 0 160px;
+        font-size: 0.875rem;
+        text-align: right;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .bar-track {
+        flex: 1;
+        height: 28px;
+        background: var(--color-bg);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    .bar-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.6s ease;
+        display: flex;
+        align-items: center;
+        padding-left: 0.5rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: white;
+        min-width: fit-content;
+    }
+    .bar-value {
+        flex: 0 0 60px;
+        font-size: 0.875rem;
+        font-weight: 600;
+        text-align: right;
+    }
+
+    .bar-fill.coverage-high { background: #22c55e; }
+    .bar-fill.coverage-medium { background: #eab308; }
+    .bar-fill.coverage-low { background: #ef4444; }
+    .bar-fill.tone { background: var(--color-primary); }
+
+    /* Framing stacked bar */
+    .framing-bar {
+        display: flex;
+        height: 100%;
+    }
+    .framing-segment {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: white;
+    }
+    .framing-left { background: var(--color-left); }
+    .framing-center { background: var(--color-center); }
+    .framing-right { background: var(--color-right); }
+
+    /* Summary box */
+    .summary-text {
+        line-height: 1.8;
+        font-size: 1rem;
+        border-left: 4px solid var(--color-primary);
+        padding-left: 1.5rem;
+    }
+    .summary-meta {
+        margin-top: 1rem;
+        font-size: 0.75rem;
+        color: var(--color-text-muted);
+    }
+
+    /* Nugget badges */
+    .nugget-badge {
+        flex-shrink: 0;
+        font-size: 0.65rem;
+        font-weight: 700;
+        padding: 0.2rem 0.4rem;
+        border-radius: 3px;
+        text-transform: uppercase;
+    }
+    .nugget-vital { background: #7c3aed; color: white; }
+    .nugget-okay { background: var(--color-border); color: var(--color-text-muted); }
+    .nugget-tier-1 { background: #dc2626; color: white; }
+    .nugget-tier-2 { background: #2563eb; color: white; }
+    .nugget-tier-3 { background: #6b7280; color: white; }
+
+    /* Report header */
+    .report-header {
+        padding: 3rem 0 2rem;
+        border-bottom: 1px solid var(--color-border);
+        margin-bottom: 2rem;
+    }
+    .report-badge {
+        display: inline-block;
+        background: var(--color-primary);
+        color: white;
+        padding: 0.25rem 0.75rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-bottom: 1rem;
+    }
+
+    .report-pending {
+        text-align: center;
+        padding: 4rem 2rem;
+        color: var(--color-text-muted);
+    }
+    .report-pending h2 { margin-bottom: 1rem; color: var(--color-text); }
+
+    .bar-source-badge {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 0.5rem;
+    }
+
+    .section-desc {
+        font-size: 0.875rem;
+        color: var(--color-text-muted);
+        margin-bottom: 1.5rem;
+    }
+
+    /* Section header with help icon */
+    .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+    }
+    .section-header h2 {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: none;
+    }
+    .help-toggle {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 1.5px solid var(--color-text-muted);
+        background: none;
+        color: var(--color-text-muted);
+        font-size: 0.8rem;
+        font-weight: 700;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: all 0.15s ease;
+    }
+    .help-toggle:hover {
+        border-color: var(--color-primary);
+        color: var(--color-primary);
+    }
+    .help-panel {
+        display: none;
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1.5rem;
+        font-size: 0.825rem;
+        line-height: 1.6;
+        color: var(--color-text-muted);
+    }
+    .help-panel.open { display: block; }
+    .help-panel p { margin: 0 0 0.5rem; }
+    .help-panel p:last-child { margin-bottom: 0; }
+    .help-panel strong { color: var(--color-text); }
+
+    .framing-legend {
+        display: flex;
+        gap: 1.5rem;
+        margin-top: 1rem;
+        font-size: 0.75rem;
+    }
+    .legend-swatch {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 2px;
+        margin-right: 0.25rem;
+        vertical-align: middle;
+    }
+
+    /* ============================================ */
+    /* Summary Table                                */
+    /* ============================================ */
+    .summary-table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .summary-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+    }
+    .summary-table th {
+        text-align: left;
+        padding: 0.75rem 1rem;
+        border-bottom: 2px solid var(--color-border);
+        color: var(--color-text-muted);
+        font-weight: 600;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        white-space: nowrap;
+        user-select: none;
+    }
+    .summary-table th.sortable { cursor: pointer; }
+    .summary-table th.sortable:hover { color: var(--color-text); }
+    .summary-table th.sort-active { color: var(--color-primary); }
+    .summary-table th.sortable::after {
+        content: ' \2195';
+        font-size: 0.7rem;
+        opacity: 0.4;
+    }
+    .summary-table th.sort-asc::after { content: ' \2191'; opacity: 1; }
+    .summary-table th.sort-desc::after { content: ' \2193'; opacity: 1; }
+    .summary-table td {
+        padding: 0.6rem 1rem;
+        border-bottom: 1px solid var(--color-border);
+        vertical-align: middle;
+    }
+    .summary-table tbody tr:hover { background: var(--color-surface-hover); }
+
+    .cell-bar {
+        display: inline-block;
+        width: 60px;
+        height: 8px;
+        background: var(--color-bg);
+        border-radius: 4px;
+        overflow: hidden;
+        vertical-align: middle;
+        margin-right: 0.5rem;
+    }
+    .cell-bar-fill {
+        display: block;
+        height: 100%;
+        border-radius: 4px;
+    }
+    .cell-bar-fill.coverage-high { background: #22c55e; }
+    .cell-bar-fill.coverage-medium { background: #eab308; }
+    .cell-bar-fill.coverage-low { background: #ef4444; }
+    .cell-bar-fill.tone { background: var(--color-primary); }
+    .cell-value { font-weight: 600; font-size: 0.8rem; }
+
+    .leaning-badge {
+        display: inline-block;
+        padding: 0.15rem 0.5rem;
+        border-radius: 3px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: capitalize;
+    }
+    .leaning-left { background: var(--color-left); color: white; }
+    .leaning-center { background: var(--color-center); color: white; }
+    .leaning-right { background: var(--color-right); color: white; }
+
+    .mini-framing-bar {
+        display: flex;
+        width: 80px;
+        height: 10px;
+        border-radius: 3px;
+        overflow: hidden;
+    }
+    .mini-framing-bar span { height: 100%; }
+
+    /* ============================================ */
+    /* Collapsible Sections                        */
+    /* ============================================ */
+    .collapsible-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 1rem 1.5rem;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius);
+        color: var(--color-text-muted);
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        margin-bottom: 0.5rem;
+        transition: color 0.15s;
+    }
+    .collapsible-toggle:hover { color: var(--color-text); }
+    .toggle-icon {
+        font-size: 0.75rem;
+        transition: transform 0.2s;
+    }
+    .toggle-icon.open { transform: rotate(180deg); }
+
+    /* ============================================ */
+    /* Fact Coverage Matrix                        */
+    /* ============================================ */
+    .matrix-filters {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+    }
+    .filter-btn {
+        padding: 0.4rem 0.9rem;
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius);
+        color: var(--color-text-muted);
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .filter-btn:hover {
+        border-color: var(--color-primary);
+        color: var(--color-text);
+    }
+    .filter-btn.active {
+        background: var(--color-primary);
+        border-color: var(--color-primary);
+        color: white;
+    }
+
+    .matrix-legend {
+        display: flex;
+        gap: 1.25rem;
+        margin-bottom: 1rem;
+        font-size: 0.75rem;
+        color: var(--color-text-muted);
+    }
+    .legend-cell {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        vertical-align: middle;
+        margin-right: 0.3rem;
+    }
+    .legend-cell.cell-support { background: #22c55e; }
+    .legend-cell.cell-partial_support { background: #eab308; }
+    .legend-cell.cell-not_support { background: #ef4444; }
+    .legend-cell.cell-no_data { background: var(--color-border); }
+
+    .matrix-container {
+        overflow: auto;
+        max-height: 70vh;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius);
+    }
+    .fact-matrix-table {
+        border-collapse: separate;
+        border-spacing: 0;
+        min-width: 100%;
+    }
+    .fact-matrix-table thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: var(--color-surface);
+        padding: 0.75rem 0.5rem;
+        border-bottom: 2px solid var(--color-border);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        color: var(--color-text-muted);
+        white-space: nowrap;
+    }
+    .matrix-fact-header {
+        position: sticky;
+        left: 0;
+        z-index: 3;
+        min-width: 250px;
+        width: 50%;
+        text-align: left;
+    }
+    .matrix-source-header {
+        text-align: center;
+        min-width: 70px;
+    }
+    .matrix-source-name {
+        writing-mode: vertical-lr;
+        transform: rotate(180deg);
+        display: inline-block;
+        max-height: 100px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .matrix-fact-cell {
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        background: var(--color-surface);
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+        border-right: 1px solid var(--color-border);
+        min-width: 250px;
+        width: 50%;
+    }
+    .matrix-fact-inner {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    .matrix-fact-text {
+        font-size: 0.8rem;
+        line-height: 1.4;
+    }
+    .matrix-cell {
+        padding: 0;
+        border-bottom: 1px solid var(--color-border);
+        text-align: center;
+        width: 70px;
+        min-width: 70px;
+        height: 36px;
+    }
+    .matrix-cell.cell-support { background: rgba(34, 197, 94, 0.25); }
+    .matrix-cell.cell-partial_support { background: rgba(234, 179, 8, 0.25); }
+    .matrix-cell.cell-not_support { background: rgba(239, 68, 68, 0.25); }
+    .matrix-cell.cell-no_data { background: var(--color-bg); }
+    .matrix-cell:hover {
+        outline: 2px solid var(--color-primary);
+        outline-offset: -2px;
+    }
+    .matrix-row.hidden-row { display: none; }
+
+    /* ============================================ */
+    /* Theme Groups                                */
+    /* ============================================ */
+    .theme-group {
+        margin-bottom: 0.5rem;
+    }
+    .theme-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding: 0.75rem 1rem;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius);
+        cursor: pointer;
+        transition: all 0.15s;
+        color: var(--color-text);
+    }
+    .theme-toggle:hover {
+        border-color: var(--color-primary);
+    }
+    .theme-toggle-content {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    .theme-icon {
+        font-size: 0.65rem;
+        transition: transform 0.2s;
+        color: var(--color-text-muted);
+    }
+    .theme-icon.open {
+        transform: rotate(90deg);
+    }
+    .theme-name {
+        font-weight: 600;
+        font-size: 0.95rem;
+    }
+    .theme-count {
+        font-size: 0.8rem;
+        color: var(--color-text-muted);
+    }
+    .theme-coverage-summary {
+        display: flex;
+        gap: 0.5rem;
+        font-size: 0.7rem;
+    }
+    .theme-coverage-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        display: inline-block;
+    }
+    .theme-body {
+        border: 1px solid var(--color-border);
+        border-top: none;
+        border-radius: 0 0 var(--radius) var(--radius);
+        overflow: hidden;
+    }
+    .theme-body .matrix-container {
+        border: none;
+        border-radius: 0;
+        max-height: none;
+    }
+    .theme-group.expanded .theme-toggle {
+        border-radius: var(--radius) var(--radius) 0 0;
+        border-bottom-color: transparent;
+    }
+
+    /* ============================================ */
+    /* Publication Timeline (row-based)            */
+    /* ============================================ */
+    /* Toolbar: search + zoom */
+    .tl-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin: 0.5rem 0 0.75rem;
+    }
+    .tl-search-input {
+        flex: 0 1 220px;
+        padding: 0.35rem 0.65rem;
+        font-size: 0.8rem;
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        background: var(--color-surface);
+        color: var(--color-text);
+        outline: none;
+        transition: border-color 0.2s;
+    }
+    .tl-search-input:focus {
+        border-color: var(--color-primary);
+    }
+    .tl-search-input::placeholder {
+        color: var(--color-text-muted);
+    }
+    .tl-zoom-controls {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin-left: auto;
+    }
+    .tl-zoom-btn {
+        width: 28px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-size: 1rem;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+        line-height: 1;
+    }
+    .tl-zoom-btn:hover {
+        background: var(--color-border);
+        border-color: var(--color-text-muted);
+    }
+    .tl-zoom-btn:disabled {
+        opacity: 0.35;
+        cursor: default;
+    }
+    .tl-zoom-label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--color-text-muted);
+        min-width: 2rem;
+        text-align: center;
+    }
+    /* Scrollable viewport */
+    .tl-viewport {
+        overflow-x: auto;
+        position: relative;
+        padding-bottom: 4px;
+    }
+    .tl-viewport::-webkit-scrollbar {
+        height: 6px;
+    }
+    .tl-viewport::-webkit-scrollbar-track {
+        background: var(--color-surface);
+        border-radius: 3px;
+    }
+    .tl-viewport::-webkit-scrollbar-thumb {
+        background: var(--color-border);
+        border-radius: 3px;
+    }
+    .tl-canvas {
+        min-width: 100%;
+    }
+    /* Row-based timeline */
+    .tl-row {
+        display: flex;
+        align-items: center;
+        height: 30px;
+        gap: 0.75rem;
+        padding: 0 0.25rem;
+        transition: opacity 0.2s;
+    }
+    .tl-row:hover {
+        background: rgba(255,255,255,0.03);
+    }
+    .tl-row-name {
+        flex: 0 0 160px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: right;
+        color: var(--color-text);
+    }
+    .tl-row-track {
+        flex: 1 1 auto;
+        position: relative;
+        height: 2px;
+        background: var(--color-border);
+        border-radius: 1px;
+        min-width: 200px;
+    }
+    .tl-row-dot {
+        position: absolute;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--color-primary);
+        border: 2px solid var(--color-surface);
+        box-shadow: 0 0 0 1px var(--color-primary);
+    }
+    .tl-row-dot.tl-dot-first {
+        width: 12px;
+        height: 12px;
+        background: #22c55e;
+        box-shadow: 0 0 0 1px #22c55e, 0 0 6px rgba(34,197,94,0.4);
+    }
+    .tl-row-meta {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.7rem;
+        color: var(--color-text-muted);
+        white-space: nowrap;
+        min-width: 80px;
+    }
+    .tl-first-tag {
+        font-size: 0.6rem;
+        font-weight: 700;
+        color: #22c55e;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .tl-badge {
+        font-size: 0.6rem;
+        font-weight: 600;
+        background: var(--color-border);
+        color: var(--color-text);
+        padding: 1px 5px;
+        border-radius: 8px;
+    }
+    /* Search states */
+    .tl-dimmed {
+        opacity: 0.15 !important;
+    }
+    .tl-highlight .tl-row-name {
+        color: var(--color-primary);
+    }
+    .tl-highlight .tl-row-dot {
+        box-shadow: 0 0 0 3px var(--color-primary), 0 0 10px rgba(99,102,241,0.5);
+    }
+    .tl-no-match {
+        font-size: 0.75rem;
+        color: var(--color-text-muted);
+        opacity: 0.7;
+        margin-left: 0.5rem;
+    }
+    /* Time range labels */
+    .timeline-range-label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.7rem;
+        color: var(--color-text-muted);
+        margin: 0.5rem 0 0;
+        padding: 0.25rem 0.25rem 0 calc(160px + 0.75rem + 0.25rem);
+    }
+
+    @media (max-width: 768px) {
+        .report-header { padding: 1.5rem 0 1rem; }
+        .report-section { padding: 1rem; }
+        .topic-stats { flex-wrap: wrap; }
+        .matrix-source-header { min-width: 50px; }
+        .matrix-cell { width: 50px; min-width: 50px; }
+        .matrix-fact-cell { min-width: 180px; max-width: 250px; }
+        .matrix-fact-header { min-width: 180px; max-width: 250px; }
+        .summary-table th, .summary-table td { padding: 0.5rem 0.5rem; }
+        .cell-bar { width: 40px; }
+        .tl-toolbar { flex-wrap: wrap; gap: 0.5rem; }
+        .tl-search-input { flex: 1 1 150px; }
+        .tl-row-name { flex: 0 0 100px; font-size: 0.65rem; }
+        .timeline-range-label { padding-left: calc(100px + 0.75rem + 0.25rem); }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <!-- Report Header -->
+    <header class="report-header">
+        <span class="report-badge">Media Comparison Report</span>
+        <h1>{{ topic.title }}</h1>
+        <div class="topic-stats mt-2">
+            <div class="stat-item">
+                <div class="stat-value">{{ topic.article_count }}</div>
+                <div class="stat-label">Articles</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">{{ topic.source_count }}</div>
+                <div class="stat-label">Sources</div>
+            </div>
+            {% if pool %}
+            <div class="stat-item">
+                <div class="stat-value">{{ pool.nugget_count }}</div>
+                <div class="stat-label">Claims Identified</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">{{ pool.vital_nugget_count }}</div>
+                <div class="stat-label">Vital Claims</div>
+            </div>
+            {% endif %}
+        </div>
+        <div class="mt-2">
+            <a href="{% url 'web:home' %}" class="text-muted" style="font-size: 0.875rem;">
+                &larr; Back to home
+            </a>
+        </div>
+    </header>
+
+    <div style="background: var(--color-bg-alt, #1a1a2e); border: 1px solid var(--color-border); border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1.5rem; font-size: 0.8rem; color: var(--color-text-muted);">
+        <strong style="color: var(--color-text);">Note:</strong> Consensus reflects what most sources reported, not objective truth. Claims widely repeated across outlets may still be inaccurate. Prism measures <em>relative coverage</em>, not correctness.
+    </div>
+
+    {% if not pool or pool.status != 'complete' %}
+    <!-- Analysis pending — show source articles as fallback -->
+    <section class="report-section">
+        <h2>Analysis In Progress</h2>
+        <p class="section-desc">
+            The media comparison report for this topic {% if pool %}is currently {{ pool.get_status_display|lower }}{% else %}has not started yet{% endif %}.
+            In the meantime, you can read the original coverage below.
+        </p>
+
+        {% if source_articles %}
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            {% for article in source_articles %}
+            <div style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem; background: var(--color-bg); border-radius: var(--radius);">
+                <span class="article-source-badge bias-{{ article.source.known_bias }}" style="flex-shrink: 0; font-size: 0.65rem; margin-top: 0.15rem;">
+                    {{ article.source.get_known_bias_display }}
+                </span>
+                <div style="flex: 1; min-width: 0;">
+                    <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600;">
+                        {{ article.title }}
+                    </a>
+                    <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-top: 0.25rem;">
+                        {{ article.source.name }}
+                        {% if article.published_at %} &middot; {{ article.published_at|date:"M d, Y" }}{% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted">No articles have been collected yet.</p>
+        {% endif %}
+    </section>
+
+    {% else %}
+
+    <!-- Section 1: Neutral Summary -->
+    <section class="report-section">
+        <h2>Neutral Summary</h2>
+        {% if summary and summary.status == 'complete' %}
+        <div class="summary-text">
+            {{ summary.summary_text|linebreaks }}
+        </div>
+        <div class="summary-meta">
+            Generated from {{ summary.nuggets_used }} consensus claims across {{ topic.source_count }} sources
+            {% if summary.generated_at %} &middot; {{ summary.generated_at|date:"M d, Y g:i a" }}{% endif %}
+        </div>
+        {% else %}
+        <p class="text-muted">Neutral summary is being generated...</p>
+        {% endif %}
+
+        {% if source_articles %}
+        <div style="margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--color-border);">
+            <h3 style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.75rem;">Source Articles</h3>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                {% for article in source_articles %}
+                <div style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem;">
+                    <span class="article-source-badge bias-{{ article.source.known_bias }}" style="flex-shrink: 0; font-size: 0.65rem;">
+                        {{ article.source.get_known_bias_display }}
+                    </span>
+                    <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" style="flex: 1; min-width: 0;">
+                        <strong>{{ article.source.name }}</strong>
+                        <span class="text-muted">&mdash; {{ article.title|truncatewords:12 }}</span>
+                    </a>
+                    {% if article.is_wire_content %}
+                    <span style="flex-shrink: 0; font-size: 0.6rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 3px; background: #f59e0b; color: #000; text-transform: uppercase;">Wire</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </section>
+
+    <!-- Section 2: Source Coverage (Story-Level Omission) -->
+    {% if coverage_summary %}
+    <section class="report-section">
+        <h2>Source Coverage</h2>
+        <p class="section-desc">
+            {{ coverage_summary.covering_sources }} source{{ coverage_summary.covering_sources|pluralize }} covered this event.
+            {% if coverage_summary.notable_missing %}
+            {{ coverage_summary.notable_missing|length }} major source{{ coverage_summary.notable_missing|length|pluralize }} did not publish any article.
+            {% endif %}
+        </p>
+
+        <h4 style="margin-top: 1rem; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--color-muted);">Sources that covered this story</h4>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+            {% for source in coverage_summary.covering_source_details %}
+            <span style="background: var(--color-accent-muted, #1a3a2a); border: 1px solid var(--color-accent, #2d8a56); border-radius: 4px; padding: 0.25rem 0.75rem; font-size: 0.8rem;">
+                {{ source.name }}
+            </span>
+            {% endfor %}
+        </div>
+
+        {% if coverage_summary.notable_missing %}
+        <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--color-muted);">Notable sources that did not cover this story</h4>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+            {% for source in coverage_summary.notable_missing %}
+            <span style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 4px; padding: 0.25rem 0.75rem; font-size: 0.8rem; opacity: 0.7;">
+                {{ source.name }}
+            </span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </section>
+    {% endif %}
+
+    <!-- Section: Publication Timeline -->
+    {% if publication_timeline %}
+    <section class="report-section">
+        <div class="section-header">
+            <h2>Publication Timeline</h2>
+            <button class="help-toggle" onclick="toggleHelp('timeline-help')" title="How to read this timeline">?</button>
+        </div>
+        <div class="help-panel" id="timeline-help">
+            <p>Shows when each source published their article. The green dot marks the first source to publish. Use search to find a source and zoom to spread clustered labels.</p>
+        </div>
+
+        <!-- Toolbar: search + zoom -->
+        <div class="tl-toolbar">
+            <input type="text" class="tl-search-input" id="tl-search"
+                   placeholder="Search sources..." autocomplete="off">
+            <div class="tl-zoom-controls">
+                <button class="tl-zoom-btn" id="tl-zoom-out" title="Zoom out">&minus;</button>
+                <span class="tl-zoom-label" id="tl-zoom-label">1x</span>
+                <button class="tl-zoom-btn" id="tl-zoom-in" title="Zoom in">+</button>
+            </div>
+        </div>
+
+        <!-- Timeline viewport (scrollable when zoomed) -->
+        <div class="tl-viewport" id="tl-viewport">
+            <div class="tl-canvas" id="tl-canvas">
+                <!-- JS renders rows here -->
+            </div>
+        </div>
+
+        <div class="timeline-range-label">
+            <span>{{ timeline_start|date:"M d, Y H:i" }} UTC</span>
+            {% if timeline_end != timeline_start %}
+            <span>{{ timeline_end|date:"H:i" }} UTC</span>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
+    <!-- Section 3: Source Analysis Overview (Compact Table) -->
+    <section class="report-section">
+        <div class="section-header">
+            <h2>Source Analysis Overview</h2>
+            <button class="help-toggle" onclick="toggleHelp('overview-help')" title="How to read this table">?</button>
+        </div>
+        <div class="help-panel" id="overview-help">
+            <p><strong>Coverage %</strong> = percentage of consensus claims this source included (higher = more comprehensive).</p>
+            <p><strong>Subjectivity %</strong> = proportion of subjective language detected (lower = more objective).</p>
+            <p><strong>Leaning</strong> = classifier-detected political framing pattern (Left / Center / Right).</p>
+            <p>Click any column header to sort. Expand "Detailed Charts" below for full visualizations.</p>
+        </div>
+
+        {% if source_summary %}
+        <div class="summary-table-wrap">
+            <table class="summary-table" id="source-summary-table">
+                <thead>
+                    <tr>
+                        <th data-sort="source" class="sortable">Source</th>
+                        <th data-sort="coverage" class="sortable sort-active sort-desc">Coverage %</th>
+                        <th data-sort="subjectivity" class="sortable">Subjectivity %</th>
+                        <th data-sort="leaning" class="sortable">Leaning</th>
+                        <th>Profile</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for src in source_summary %}
+                    <tr>
+                        <td data-value="{{ src.source_name }}">
+                            <span class="bar-source-badge" style="background: var(--color-{{ src.bias }})"></span>
+                            {{ src.source_name }}
+                        </td>
+                        <td data-value="{{ src.weighted_coverage_pct|default_if_none:'-1' }}">
+                            {% if src.weighted_coverage_pct != None %}
+                            <span class="cell-bar">
+                                <span class="cell-bar-fill {% if src.weighted_coverage_pct >= 70 %}coverage-high{% elif src.weighted_coverage_pct >= 40 %}coverage-medium{% else %}coverage-low{% endif %}"
+                                      style="width: {{ src.weighted_coverage_pct }}%"></span>
+                            </span>
+                            <span class="cell-value">{{ src.weighted_coverage_pct }}%</span>
+                            {% else %}<span class="text-muted">--</span>{% endif %}
+                        </td>
+                        <td data-value="{{ src.subjectivity_pct|default_if_none:'-1' }}">
+                            {% if src.subjectivity_pct != None %}
+                            <span class="cell-bar">
+                                <span class="cell-bar-fill tone" style="width: {{ src.subjectivity_pct }}%"></span>
+                            </span>
+                            <span class="cell-value">{{ src.subjectivity_pct }}%</span>
+                            {% else %}<span class="text-muted">--</span>{% endif %}
+                        </td>
+                        <td data-value="{{ src.dominant_leaning|default:'none' }}">
+                            {% if src.dominant_leaning %}
+                            <span class="leaning-badge leaning-{{ src.dominant_leaning }}">{{ src.dominant_leaning }}</span>
+                            {% else %}<span class="text-muted">--</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if src.left_pct != None %}
+                            <div class="mini-framing-bar">
+                                <span class="framing-left" style="width: {{ src.left_pct }}%"></span>
+                                <span class="framing-center" style="width: {{ src.center_pct }}%"></span>
+                                <span class="framing-right" style="width: {{ src.right_pct }}%"></span>
+                            </div>
+                            {% else %}<span class="text-muted">--</span>{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted">No analysis data available yet.</p>
+        {% endif %}
+    </section>
+
+    <!-- Detailed Charts (collapsible) -->
+    <div class="collapsible-section" style="margin-bottom: 2rem;">
+        <button class="collapsible-toggle" onclick="toggleSection('detail-charts')">
+            <span>Detailed Charts</span>
+            <span class="toggle-icon" id="detail-charts-icon">&#9660;</span>
+        </button>
+        <div class="collapsible-content" id="detail-charts" style="display: none;">
+
+            <!-- Coverage Completeness Chart -->
+            <section class="report-section">
+                <div class="section-header">
+                    <h2>Coverage Completeness</h2>
+                    <button class="help-toggle" onclick="toggleHelp('coverage-help')" title="How is this calculated?">?</button>
+                </div>
+                <div class="help-panel" id="coverage-help">
+                    <p><strong>How coverage is measured:</strong> Prism extracts atomic claims ("nuggets") from every article covering this event using an LLM,
+                    then deduplicates them into a <strong>consensus claims pool</strong> &mdash; the set of all claims reported by at least one source.</p>
+                    <p>Each article is then scored by an LLM judge on how many of these consensus claims it includes. Claims can be
+                    <strong>supported</strong> (clearly stated), <strong>partially supported</strong> (implied or incomplete), or <strong>not supported</strong> (omitted).</p>
+                    <p><strong>Weighted score:</strong> Partial support counts as 50%. "Vital" claims (confirmed by 3+ sources) are weighted 2&times; more heavily,
+                    so omitting a widely-reported claim penalizes the score more than omitting a claim only one source mentioned.</p>
+                    <p>A score of 100% means the article covered every consensus claim. Lower scores indicate more claims were omitted.</p>
+                </div>
+                <p class="section-desc">
+                    What percentage of consensus claims did each source's article include?
+                    Vital claims (confirmed by multiple sources) are weighted more heavily.
+                    Higher is more comprehensive.
+                </p>
+                {% if omission_data %}
+                <div style="position: relative; height: {{ omission_data|length|add:"1" }}0rem; min-height: 200px;">
+                    <canvas id="omission-chart" role="img" aria-label="Bar chart showing coverage completeness percentage for each news source"></canvas>
+                </div>
+                {% else %}
+                <p class="text-muted">No omission scores available.</p>
+                {% endif %}
+            </section>
+
+            <!-- Tone Chart -->
+            <section class="report-section">
+                <div class="section-header">
+                    <h2>Tone (Objectivity)</h2>
+                    <button class="help-toggle" onclick="toggleHelp('tone-help')" title="How is this calculated?">?</button>
+                </div>
+                <div class="help-panel" id="tone-help">
+                    <p><strong>How objectivity is measured:</strong> Each sentence in the article is run through a subjectivity classifier
+                    (<em>GroNLP/mdebertav3-subjectivity-english</em>), a DeBERTa model trained to distinguish objective from subjective language.</p>
+                    <p>Rather than a simple yes/no, each sentence gets a <strong>continuous subjectivity probability</strong> from 0% (fully objective)
+                    to 100% (fully subjective). The article's score is the average across all its sentences.</p>
+                    <p><strong>Labels:</strong> Highly Objective (&lt;10%) &middot; Mostly Objective (10-15%) &middot; Mixed (15-22%) &middot; Mostly Subjective (22-30%) &middot; Highly Subjective (&gt;30%)</p>
+                    <p>Lower scores indicate more neutral, information-focused reporting. Higher scores indicate more opinionated or narrative-driven language.</p>
+                </div>
+                <p class="section-desc">
+                    Average subjectivity probability across all sentences. Lower means more objective reporting.
+                </p>
+                {% if tone_data %}
+                <div style="position: relative; height: {{ tone_data|length|add:"1" }}0rem; min-height: 200px;">
+                    <canvas id="tone-chart" role="img" aria-label="Bar chart showing subjectivity percentage for each news source"></canvas>
+                </div>
+                {% else %}
+                <p class="text-muted">No tone analysis available.</p>
+                {% endif %}
+            </section>
+
+            <!-- Framing Chart -->
+            <section class="report-section">
+                <div class="section-header">
+                    <h2>Framing (Political Leaning)</h2>
+                    <button class="help-toggle" onclick="toggleHelp('framing-help')" title="How is this calculated?">?</button>
+                </div>
+                <div class="help-panel" id="framing-help">
+                    <p><strong>How framing is measured:</strong> Each sentence in the article is run through a political leaning classifier
+                    (<em>matous-volf/political-leaning-politics</em>), a model trained to detect left, center, and right-leaning language patterns.</p>
+                    <p>Each sentence produces three probability scores &mdash; <strong>left</strong>, <strong>center</strong>, and <strong>right</strong> &mdash; which are averaged across all sentences to give the article's overall framing profile.</p>
+                    <p>The stacked bar shows the proportion of each leaning. The <strong>dominant leaning</strong> is whichever scored highest.</p>
+                    <p>This measures <strong>language patterns</strong>, not accuracy. An article can use left-leaning framing while reporting the same claims as other sources, or vice versa.</p>
+                </div>
+                <p class="section-desc">
+                    Classifier-detected political framing patterns in each article's language.
+                </p>
+                {% if framing_data %}
+                <div style="position: relative; height: {{ framing_data|length|add:"1" }}0rem; min-height: 200px;">
+                    <canvas id="framing-chart" role="img" aria-label="Stacked bar chart showing political leaning distribution for each news source"></canvas>
+                </div>
+                {% else %}
+                <p class="text-muted">No framing analysis available.</p>
+                {% endif %}
+            </section>
+
+        </div>
+    </div>
+
+    <!-- Section: Claims Coverage Matrix -->
+    <section class="report-section">
+        <div class="section-header">
+            <h2>Claims Coverage Matrix ({{ vital_nuggets|length }} Vital / {{ all_nuggets|length }} Total)</h2>
+            <button class="help-toggle" onclick="toggleHelp('matrix-help')" title="How to read this matrix">?</button>
+        </div>
+        <div class="help-panel" id="matrix-help">
+            <p>Prism extracts atomic claims from every source's article and builds a <strong>consensus claims pool</strong> &mdash; the combined set of claims reported across all coverage.</p>
+            <p>Each row is one consensus claim. Each column is a news source. Cells show whether the source
+            <strong style="color:#22c55e">reported</strong>,
+            <strong style="color:#eab308">partially mentioned</strong>,
+            or <strong style="color:#ef4444">omitted</strong> that claim.</p>
+            <p><strong>Tiers:</strong> Claims are ranked by importance &mdash; <em>Headline</em> (T1) are the most critical, <em>Context</em> (T2) provide supporting detail, and <em>Detail</em> (T3) are minor points shown only when expanded.</p>
+            <p><strong>Vital</strong> claims are confirmed by 40%+ of sources, indicating broad consensus.</p>
+            {% if has_themes %}<p>Claims are organized into <strong>themes</strong> for easier navigation. Click a theme to expand or collapse it.</p>{% endif %}
+        </div>
+
+        {% if matrix_rows %}
+        <!-- Filter controls -->
+        <div class="matrix-filters" id="matrix-filters">
+            <button class="filter-btn active" data-filter="all">{% if matrix_truncated %}All Shown ({{ matrix_rows|length }}){% else %}All Claims ({{ matrix_rows|length }}){% endif %}</button>
+            <button class="filter-btn" data-filter="vital">Vital Only ({{ vital_nuggets|length }})</button>
+            {% if has_tiers %}
+            <button class="filter-btn" data-filter="tier1">Headline ({{ tier1_nuggets|length }})</button>
+            <button class="filter-btn" data-filter="tier2">Context ({{ tier2_nuggets|length }})</button>
+            {% endif %}
+            <button class="filter-btn" data-filter="omitted">Most Omitted</button>
+        </div>
+
+        <!-- Legend -->
+        <div class="matrix-legend">
+            <span><span class="legend-cell cell-support"></span> Supported</span>
+            <span><span class="legend-cell cell-partial_support"></span> Partial</span>
+            <span><span class="legend-cell cell-not_support"></span> Omitted</span>
+            <span><span class="legend-cell cell-no_data"></span> No Data</span>
+        </div>
+
+        {% if has_themes %}
+        <!-- Themed display: claims grouped by theme with collapsible sections -->
+        <div id="themed-matrix">
+            {% for theme_name, theme_rows in themed_groups.items %}
+            <div class="theme-group" data-theme="{{ theme_name }}">
+                <button class="theme-toggle" onclick="toggleTheme(this)">
+                    <span class="theme-toggle-content">
+                        <span class="toggle-icon theme-icon">&#9654;</span>
+                        <span class="theme-name">{{ theme_name }}</span>
+                        <span class="theme-count">{{ theme_rows|length }} claim{{ theme_rows|length|pluralize }}</span>
+                    </span>
+                    <span class="theme-coverage-summary" id="theme-coverage-{{ forloop.counter }}"></span>
+                </button>
+                <div class="theme-body" style="display: none;">
+                    <div class="matrix-container">
+                        <table class="fact-matrix-table">
+                            <thead>
+                                <tr>
+                                    <th class="matrix-fact-header">Claim</th>
+                                    {% for src in matrix_sources %}
+                                    <th class="matrix-source-header">
+                                        <span class="matrix-source-name">{{ src }}</span>
+                                    </th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in theme_rows %}
+                                <tr class="matrix-row" data-importance="{{ row.importance }}" data-tier="{{ row.tier|default:'' }}" data-source-count="{{ row.source_count }}" data-theme="{{ theme_name }}">
+                                    <td class="matrix-fact-cell">
+                                        <div class="matrix-fact-inner">
+                                            {% if row.tier %}
+                                            <span class="nugget-badge nugget-tier-{{ row.tier }}" title="Tier {{ row.tier }}">
+                                                T{{ row.tier }}
+                                            </span>
+                                            {% endif %}
+                                            <span class="nugget-badge {% if row.importance == 'vital' %}nugget-vital{% else %}nugget-okay{% endif %}">
+                                                {{ row.importance }}
+                                            </span>
+                                            <span class="matrix-fact-text">{{ row.nugget_text }}</span>
+                                        </div>
+                                    </td>
+                                    {% for src in matrix_sources %}
+                                    <td class="matrix-cell cell-{{ row.cells|get_item:src }}"
+                                        title="{{ src }}: {{ row.cells|get_item:src|judgment_label }}">
+                                    </td>
+                                    {% endfor %}
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <!-- Flat display (no themes assigned) -->
+        <div class="matrix-container" id="fact-matrix">
+            <table class="fact-matrix-table">
+                <thead>
+                    <tr>
+                        <th class="matrix-fact-header">Claim</th>
+                        {% for src in matrix_sources %}
+                        <th class="matrix-source-header">
+                            <span class="matrix-source-name">{{ src }}</span>
+                        </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody id="matrix-body">
+                    {% for row in matrix_rows %}
+                    <tr class="matrix-row" data-importance="{{ row.importance }}" data-tier="{{ row.tier|default:'' }}" data-source-count="{{ row.source_count }}">
+                        <td class="matrix-fact-cell">
+                            <div class="matrix-fact-inner">
+                                {% if row.tier %}
+                                <span class="nugget-badge nugget-tier-{{ row.tier }}" title="Tier {{ row.tier }}">
+                                    T{{ row.tier }}
+                                </span>
+                                {% endif %}
+                                <span class="nugget-badge {% if row.importance == 'vital' %}nugget-vital{% else %}nugget-okay{% endif %}">
+                                    {{ row.importance }}
+                                </span>
+                                <span class="matrix-fact-text">{{ row.nugget_text }}</span>
+                            </div>
+                        </td>
+                        {% for src in matrix_sources %}
+                        <td class="matrix-cell cell-{{ row.cells|get_item:src }}"
+                            title="{{ src }}: {{ row.cells|get_item:src|judgment_label }}">
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+        {% if matrix_truncated %}
+        <p style="margin-top: 1rem;">
+            <a href="?matrix=all" class="btn btn-outline-secondary btn-sm">
+                Show all claims (including Tier 3 details)
+            </a>
+            <span class="text-muted ms-2">Showing Tier 1 &amp; 2 claims only for faster loading.</span>
+        </p>
+        {% endif %}
+        {% else %}
+        <p class="text-muted">No claim-level judgment data available.</p>
+        {% endif %}
+    </section>
+
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% load static %}
+{% if publication_timeline %}
+<script>var timelineData = {{ timeline_json|safe }};</script>
+<script src="{% static 'js/timeline.js' %}?v=2"></script>
+{% endif %}
+{% if pool and pool.status == 'complete' %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+var omissionData = {{ omission_json|safe }};
+var toneData = {{ tone_json|safe }};
+var framingData = {{ framing_json|safe }};
+</script>
+<script src="{% static 'js/report_charts.js' %}"></script>
+{% endif %}
+<script>
+function toggleHelp(id) {
+    var panel = document.getElementById(id);
+    panel.classList.toggle('open');
+}
+function toggleSection(id) {
+    var content = document.getElementById(id);
+    var icon = document.getElementById(id + '-icon');
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        if (icon) icon.classList.add('open');
+        // Trigger Chart.js resize after showing
+        window.dispatchEvent(new Event('resize'));
+    } else {
+        content.style.display = 'none';
+        if (icon) icon.classList.remove('open');
+    }
+}
+</script>
+<script>
+function toggleTheme(btn) {
+    var group = btn.closest('.theme-group');
+    var body = group.querySelector('.theme-body');
+    var icon = btn.querySelector('.theme-icon');
+    var isOpen = body.style.display !== 'none';
+    body.style.display = isOpen ? 'none' : 'block';
+    icon.classList.toggle('open', !isOpen);
+    group.classList.toggle('expanded', !isOpen);
+}
+
+// Fact matrix filter buttons — works with both themed and flat layouts
+document.addEventListener('DOMContentLoaded', function () {
+    var filterBtns = document.querySelectorAll('.filter-btn');
+    if (!filterBtns.length) return;
+
+    // Get all matrix rows regardless of container
+    function getAllRows() {
+        return document.querySelectorAll('.matrix-row');
+    }
+
+    filterBtns.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            filterBtns.forEach(function (b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+
+            var filter = btn.dataset.filter;
+            var rows = getAllRows();
+
+            rows.forEach(function (row) {
+                var show = true;
+
+                if (filter === 'vital') {
+                    show = row.dataset.importance === 'vital';
+                } else if (filter === 'tier1') {
+                    show = row.dataset.tier === '1';
+                } else if (filter === 'tier2') {
+                    show = row.dataset.tier === '2';
+                } else if (filter === 'omitted') {
+                    var cells = row.querySelectorAll('.matrix-cell');
+                    show = Array.from(cells).some(function (c) {
+                        return c.classList.contains('cell-not_support');
+                    });
+                }
+
+                row.classList.toggle('hidden-row', !show);
+            });
+
+            // For themed layout: hide theme groups with no visible rows
+            var themeGroups = document.querySelectorAll('.theme-group');
+            themeGroups.forEach(function (group) {
+                var visibleRows = group.querySelectorAll('.matrix-row:not(.hidden-row)');
+                group.style.display = visibleRows.length > 0 ? '' : 'none';
+                // Update count badge
+                var countEl = group.querySelector('.theme-count');
+                if (countEl && filter !== 'all') {
+                    var total = group.querySelectorAll('.matrix-row').length;
+                    countEl.textContent = visibleRows.length + '/' + total + ' claim' + (total !== 1 ? 's' : '');
+                } else if (countEl) {
+                    var total = group.querySelectorAll('.matrix-row').length;
+                    countEl.textContent = total + ' claim' + (total !== 1 ? 's' : '');
+                }
+            });
+        });
+    });
+
+    // Auto-expand first theme group
+    var firstGroup = document.querySelector('.theme-group');
+    if (firstGroup) {
+        var btn = firstGroup.querySelector('.theme-toggle');
+        if (btn) toggleTheme(btn);
+    }
+});
+</script>
+{% endblock %}

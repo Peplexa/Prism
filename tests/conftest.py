@@ -1,7 +1,7 @@
 """Pytest fixtures for Prism tests."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import timedelta
 from django.utils import timezone
 
 from apps.articles.models import Source, Article
@@ -15,8 +15,7 @@ def source_npr(db):
         name='NPR',
         slug='npr',
         website_url='https://www.npr.org',
-        discovery_method=Source.DiscoveryMethod.RSS,
-        discovery_url='https://feeds.npr.org/1001/rss.xml',
+        event_registry_uri='npr.org',
         known_bias=Source.BiasRating.LEFT,
         is_active=True,
     )
@@ -29,8 +28,7 @@ def source_fox(db):
         name='Fox News',
         slug='fox-news',
         website_url='https://www.foxnews.com',
-        discovery_method=Source.DiscoveryMethod.HOMEPAGE,
-        discovery_url='https://www.foxnews.com',
+        event_registry_uri='foxnews.com',
         known_bias=Source.BiasRating.RIGHT,
         is_active=True,
     )
@@ -43,8 +41,7 @@ def source_reuters(db):
         name='Reuters',
         slug='reuters',
         website_url='https://www.reuters.com',
-        discovery_method=Source.DiscoveryMethod.SITEMAP,
-        discovery_url='https://www.reuters.com/sitemap.xml',
+        event_registry_uri='reuters.com',
         known_bias=Source.BiasRating.CENTER,
         is_active=True,
     )
@@ -61,7 +58,8 @@ def article_npr(db, source_npr):
         summary='This is a test article summary from NPR.',
         content='This is the full content of the test article from NPR. ' * 50,
         published_at=timezone.now() - timedelta(hours=2),
-        status=Article.ProcessingStatus.SCRAPED,
+        status=Article.ProcessingStatus.COMPLETE,
+        event_registry_uri='er-article-1',
     )
 
 
@@ -76,26 +74,8 @@ def article_fox(db, source_fox):
         summary='This is a test article summary from Fox News.',
         content='This is the full content of the test article from Fox News. ' * 50,
         published_at=timezone.now() - timedelta(hours=1),
-        status=Article.ProcessingStatus.SCRAPED,
-    )
-
-
-@pytest.fixture
-def article_with_embedding(db, source_npr):
-    """Create an article with embedding."""
-    import numpy as np
-    embedding = np.random.rand(384).tolist()  # MiniLM embedding size
-
-    return Article.objects.create(
-        source=source_npr,
-        title='Article with Embedding',
-        slug='article-with-embedding',
-        url='https://www.npr.org/2024/01/02/embedded-article',
-        summary='This article has an embedding.',
-        content='Full content here. ' * 100,
-        published_at=timezone.now() - timedelta(hours=1),
-        status=Article.ProcessingStatus.EMBEDDED,
-        embedding=embedding,
+        status=Article.ProcessingStatus.COMPLETE,
+        event_registry_uri='er-article-2',
     )
 
 
@@ -107,8 +87,27 @@ def topic(db):
         slug='test-topic',
         description='A test topic for unit tests.',
         keywords=['test', 'topic', 'news'],
+        event_registry_uri='eng-test-event-1',
+        article_count=1,
+        source_count=1,
         trending_score=5.0,
         is_trending=True,
+    )
+
+
+@pytest.fixture
+def article_reuters(db, source_reuters):
+    """Create an article from Reuters."""
+    return Article.objects.create(
+        source=source_reuters,
+        title='Test Article from Reuters',
+        slug='test-article-reuters',
+        url='https://www.reuters.com/world/test-article',
+        summary='This is a test article summary from Reuters.',
+        content='This is the full content of the test article from Reuters. ' * 50,
+        published_at=timezone.now() - timedelta(hours=1, minutes=30),
+        status=Article.ProcessingStatus.COMPLETE,
+        event_registry_uri='er-article-3',
     )
 
 
@@ -128,12 +127,6 @@ def topic_with_articles(db, topic, article_npr, article_fox):
         cluster_rank=1,
     )
 
-    # Update article statuses
-    article_npr.status = Article.ProcessingStatus.CLUSTERED
-    article_npr.save()
-    article_fox.status = Article.ProcessingStatus.CLUSTERED
-    article_fox.save()
-
     # Update topic metrics
     topic.update_metrics()
 
@@ -141,43 +134,27 @@ def topic_with_articles(db, topic, article_npr, article_fox):
 
 
 @pytest.fixture
-def multiple_embedded_articles(db, source_npr, source_fox, source_reuters):
-    """Create multiple articles with embeddings for clustering tests."""
-    import numpy as np
+def topic_with_3_articles(db, topic, article_npr, article_fox, article_reuters):
+    """Create a topic with 3 articles from different sources."""
+    ArticleCluster.objects.create(
+        topic=topic,
+        article=article_npr,
+        confidence_score=0.95,
+        cluster_rank=0,
+    )
+    ArticleCluster.objects.create(
+        topic=topic,
+        article=article_fox,
+        confidence_score=0.85,
+        cluster_rank=1,
+    )
+    ArticleCluster.objects.create(
+        topic=topic,
+        article=article_reuters,
+        confidence_score=0.90,
+        cluster_rank=2,
+    )
 
-    articles = []
-    sources = [source_npr, source_fox, source_reuters]
+    topic.update_metrics()
 
-    # Create articles about "election" topic
-    for i, source in enumerate(sources):
-        embedding = np.random.rand(384).tolist()
-        article = Article.objects.create(
-            source=source,
-            title=f'Election Results Coverage {i+1}',
-            slug=f'election-coverage-{i+1}',
-            url=f'https://{source.slug}.com/election-{i+1}',
-            summary='Coverage of the latest election results.',
-            content='Election content here. ' * 100,
-            published_at=timezone.now() - timedelta(hours=i),
-            status=Article.ProcessingStatus.EMBEDDED,
-            embedding=embedding,
-        )
-        articles.append(article)
-
-    # Create articles about "weather" topic
-    for i, source in enumerate(sources):
-        embedding = np.random.rand(384).tolist()
-        article = Article.objects.create(
-            source=source,
-            title=f'Weather Forecast Update {i+1}',
-            slug=f'weather-forecast-{i+1}',
-            url=f'https://{source.slug}.com/weather-{i+1}',
-            summary='Latest weather forecast information.',
-            content='Weather content here. ' * 100,
-            published_at=timezone.now() - timedelta(hours=i),
-            status=Article.ProcessingStatus.EMBEDDED,
-            embedding=embedding,
-        )
-        articles.append(article)
-
-    return articles
+    return topic

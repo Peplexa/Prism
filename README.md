@@ -45,10 +45,9 @@ A news aggregation and topic clustering platform that collects articles from mul
    docker-compose up -d
    ```
 
-4. Run migrations and seed initial data:
+4. Run migrations:
    ```bash
    docker-compose exec web python manage.py migrate
-   docker-compose exec web python scripts/seed_sources.py
    ```
 
 5. Access the application at `http://localhost:8000`

@@ -4,13 +4,21 @@
 
 {% block content %}
 <div class="container">
+    {% if topic %}
+    <nav style="padding-top: 1rem; font-size: 0.875rem;">
+        <a href="{% url 'web:topic-detail' slug=topic.slug %}" class="text-muted">
+            &larr; {{ topic.title|truncatewords:8 }}
+        </a>
+    </nav>
+    {% endif %}
+
     <!-- Article Header -->
     <header class="topic-header">
         <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
             <span class="article-source-badge bias-{{ article.source.known_bias }}">
                 {{ article.source.get_known_bias_display }}
             </span>
-            <a href="{{ article.source.website_url }}" target="_blank" class="text-muted">
+            <a href="{{ article.source.website_url }}" target="_blank" rel="noopener noreferrer" class="text-muted">
                 {{ article.source.name }}
             </a>
         </div>
@@ -24,7 +32,7 @@
         </div>
 
         <div class="mt-2">
-            <a href="{{ article.url }}" target="_blank" class="text-muted" style="font-size: 0.875rem;">
+            <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="text-muted" style="font-size: 0.875rem;">
                 View original article →
             </a>
         </div>
@@ -46,10 +54,79 @@
         {% else %}
         <div class="empty-state">
             <p>Full article content not yet extracted.</p>
-            <a href="{{ article.url }}" target="_blank">Read on {{ article.source.name }} →</a>
+            <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">Read on {{ article.source.name }} →</a>
         </div>
         {% endif %}
     </section>
+
+    {% if analysis %}
+    <section class="mt-4" style="border-top: 1px solid var(--color-border); padding-top: 2rem;">
+        <h2 class="section-title">Prism Analysis</h2>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem;">
+
+            <!-- Tone Card -->
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.5rem;">
+                <h3 style="font-size: 1rem; margin-bottom: 1rem; color: var(--color-text-muted);">Tone (Objectivity)</h3>
+                <div style="font-size: 2rem; font-weight: 700; color: var(--color-primary);">
+                    {{ subjectivity_pct }}%
+                </div>
+                <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-top: 0.25rem;">
+                    subjective sentences
+                </div>
+                <div style="margin-top: 0.75rem; font-size: 0.875rem;">
+                    <strong>{{ analysis.tone_label }}</strong>
+                </div>
+                <div style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.5rem;">
+                    {{ analysis.subjective_sentence_count }} of {{ analysis.sentence_count }} sentences
+                </div>
+            </div>
+
+            <!-- Framing Card -->
+            {% if left_pct is not None %}
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.5rem;">
+                <h3 style="font-size: 1rem; margin-bottom: 1rem; color: var(--color-text-muted);">Framing (Political Leaning)</h3>
+                <div style="font-size: 2rem; font-weight: 700; color: var(--color-primary);">
+                    {{ analysis.dominant_leaning|title }}
+                </div>
+                <div style="margin-top: 0.75rem;">
+                    <div style="display: flex; height: 24px; border-radius: 4px; overflow: hidden;">
+                        <div style="width: {{ left_pct }}%; background: #3b82f6;" title="Left: {{ left_pct }}%"></div>
+                        <div style="width: {{ center_pct }}%; background: #8b5cf6;" title="Center: {{ center_pct }}%"></div>
+                        <div style="width: {{ right_pct }}%; background: #ef4444;" title="Right: {{ right_pct }}%"></div>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.5rem;">
+                    <span>Left {{ left_pct }}%</span>
+                    <span>Center {{ center_pct }}%</span>
+                    <span>Right {{ right_pct }}%</span>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Omission Card -->
+            {% if omission %}
+            <div style="background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 1.5rem;">
+                <h3 style="font-size: 1rem; margin-bottom: 1rem; color: var(--color-text-muted);">Coverage Completeness</h3>
+                <div style="font-size: 2rem; font-weight: 700; color: {% if coverage_pct >= 70 %}#22c55e{% elif coverage_pct >= 40 %}#eab308{% else %}#ef4444{% endif %};">
+                    {{ coverage_pct }}%
+                </div>
+                <div style="font-size: 0.875rem; color: var(--color-text-muted); margin-top: 0.25rem;">
+                    of consensus claims covered
+                </div>
+                <div style="font-size: 0.75rem; color: var(--color-text-muted); margin-top: 0.75rem;">
+                    {{ omission.support_count }} supported / {{ omission.total_nuggets }} total claims
+                </div>
+                {% if topic %}
+                <a href="{% url 'web:topic-detail' slug=topic.slug %}" style="display: inline-block; margin-top: 0.75rem; font-size: 0.8rem;">
+                    View full comparison report &rarr;
+                </a>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
 
     <!-- Related Articles -->
     {% if related_articles %}

@@ -1,149 +1,286 @@
-"""Celery tasks for article scraping and processing."""
+"""Celery tasks for fetching events and articles from Event Registry."""
 
 import logging
-from celery import shared_task, chain
+from datetime import timedelta
+
+from celery import shared_task
+from django.db import IntegrityError, transaction
 from django.utils import timezone
+from django.utils.text import slugify
 
 from .models import Source, Article
-from .scrapers import RSSScraper, SitemapScraper, HomepageScraper, ContentExtractor
+from apps.topics.models import Topic, ArticleCluster
 
 logger = logging.getLogger(__name__)
 
 
-def get_scraper_for_source(source: Source):
-    """Get the appropriate scraper based on source discovery method."""
-    scrapers = {
-        Source.DiscoveryMethod.RSS: RSSScraper,
-        Source.DiscoveryMethod.SITEMAP: SitemapScraper,
-        Source.DiscoveryMethod.HOMEPAGE: HomepageScraper,
+def _get_or_create_topic(event_data):
+    """
+    Get or create a Topic from Event Registry event data.
+
+    Returns (topic, created) tuple. Returns (None, False) if
+    the event data is missing required fields.
+    """
+    event_uri = event_data.get("uri", "")
+    if not event_uri:
+        return None, False
+
+    # Return existing topic if we already have this event
+    existing = Topic.objects.filter(event_registry_uri=event_uri).first()
+    if existing:
+        return existing, False
+
+    # Extract event metadata
+    lang = "eng"
+    title_data = event_data.get("title", {})
+    title = title_data.get(lang, "") if isinstance(title_data, dict) else str(title_data)
+    if not title:
+        return None, False
+
+    summary_data = event_data.get("summary", {})
+    summary = summary_data.get(lang, "") if isinstance(summary_data, dict) else str(summary_data)
+
+    # Extract keywords from concepts
+    concepts = event_data.get("concepts", [])
+    keywords = [
+        c.get("label", {}).get(lang, "")
+        for c in concepts[:10]
+        if c.get("label", {}).get(lang, "")
+    ]
+
+    # Create topic with unique slug
+    base_slug = slugify(title)[:180]
+    slug = base_slug
+    counter = 1
+    while Topic.objects.filter(slug=slug).exists():
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+
+    topic = Topic.objects.create(
+        title=title[:300],
+        slug=slug,
+        description=summary[:1000] if summary else "",
+        keywords=keywords,
+        event_registry_uri=event_uri,
+    )
+
+    return topic, True
+
+
+@shared_task(bind=True, max_retries=3)
+def fetch_events(self):
+    """
+    Poll Event Registry for new events and queue article fetching.
+
+    Runs frequently (every few minutes). Skips events already in the
+    database. Topic creation is deferred to fetch_event_articles so
+    topics are only created when articles actually exist.
+    """
+    from .services import EventRegistryClient
+
+    client = EventRegistryClient()
+
+    try:
+        events = client.fetch_recent_events()
+    except Exception as e:
+        logger.error(f"Error fetching events: {e}")
+        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
+
+    new_count = 0
+    skipped_count = 0
+
+    for event in events:
+        event_uri = event.get("uri", "")
+        if not event_uri:
+            skipped_count += 1
+            continue
+
+        # Skip events we already have
+        if Topic.objects.filter(event_registry_uri=event_uri).exists():
+            skipped_count += 1
+            continue
+
+        # Pass full event data so topic is created only when articles exist
+        fetch_event_articles.delay(event_uri, None, False, event)
+        new_count += 1
+
+    logger.info(f"Fetched events: {new_count} new, {skipped_count} existing")
+    return f"{new_count} new events, {skipped_count} skipped"
+
+
+@shared_task(bind=True, max_retries=3)
+def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=None):
+    """
+    Fetch articles for a specific event from Event Registry.
+
+    Ingests articles from all English-language sources. Sources not yet
+    in the database are auto-created with known_bias='center'.
+
+    The topic is created lazily: if topic_id is None, the topic is only
+    created after confirming Event Registry has articles for this event.
+
+    Args:
+        event_uri: The Event Registry event URI.
+        topic_id: The local Topic ID to link articles to (None to auto-create).
+        sync: If True, run analysis synchronously instead of queuing via Celery.
+        event_data: Raw event dict from Event Registry (used to create topic).
+    """
+    from .services import EventRegistryClient
+
+    # Resolve or defer topic creation
+    topic = None
+    if topic_id:
+        try:
+            topic = Topic.objects.get(id=topic_id)
+        except Topic.DoesNotExist:
+            logger.error(f"Topic {topic_id} not found")
+            return
+
+    # Cache known sources for fast lookup
+    known_sources = {
+        s.event_registry_uri: s
+        for s in Source.objects.all()
     }
-    scraper_class = scrapers.get(source.discovery_method)
-    if scraper_class:
-        return scraper_class(source)
-    return None
 
-
-@shared_task(bind=True)
-def scrape_all_sources(self):
-    """Master task: scrape all active sources."""
-    active_sources = Source.objects.filter(is_active=True)
-    count = 0
-
-    for source in active_sources:
-        scrape_source.delay(source.id)
-        count += 1
-
-    logger.info(f"Queued scraping for {count} sources")
-    return f"Queued {count} sources"
-
-
-@shared_task(bind=True, max_retries=3)
-def scrape_source(self, source_id: int):
-    """Scrape articles from a single source."""
-    try:
-        source = Source.objects.get(id=source_id)
-    except Source.DoesNotExist:
-        logger.error(f"Source {source_id} not found")
-        return
-
-    scraper = get_scraper_for_source(source)
-    if not scraper:
-        logger.error(f"No scraper available for {source.name}")
-        return
+    client = EventRegistryClient()
 
     try:
-        # Discover articles
-        discovered = scraper.discover_articles()
-        new_count = 0
+        articles = client.fetch_event_articles(event_uri)
+    except Exception as e:
+        logger.error(f"Error fetching articles for event {event_uri}: {e}")
+        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
 
-        for article_data in discovered:
-            if Article.objects.filter(url=article_data.url).exists():
-                continue
+    if not articles:
+        logger.info(f"Event {event_uri}: no articles returned, skipping topic creation")
+        return "0 articles, topic not created"
 
-            article = Article.objects.create(
-                source=source,
-                url=article_data.url,
-                title=(article_data.title or '')[:500],
-                summary=(article_data.summary or '')[:500],
-                author=(article_data.author or '')[:300],
-                published_at=article_data.published_at,
-                status=Article.ProcessingStatus.PENDING,
+    # Create topic now that we know articles exist
+    if topic is None:
+        if event_data is None:
+            logger.error(f"No topic_id and no event_data for event {event_uri}")
+            return
+        topic, created = _get_or_create_topic(event_data)
+        if topic is None:
+            logger.error(f"Could not create topic for event {event_uri}")
+            return
+
+    new_count = 0
+    rank = 0
+
+    for article_data in articles:
+        article_url = article_data.get("url", "")
+        if not article_url:
+            continue
+
+        # Find or create source
+        source_data = article_data.get("source", {})
+        source_uri = source_data.get("uri", "")
+        if not source_uri:
+            continue
+
+        source = known_sources.get(source_uri)
+        if not source:
+            source_name = source_data.get("title", source_uri.split(".")[0].title())
+            website_url = f"https://{source_uri}"
+            source, created = Source.objects.get_or_create(
+                event_registry_uri=source_uri,
+                defaults={
+                    'name': source_name[:200],
+                    'website_url': website_url,
+                }
             )
+            known_sources[source_uri] = source
+            if created:
+                logger.info(f"Auto-created source: {source_name} ({source_uri})")
 
-            # Queue content extraction
-            extract_article_content.delay(article.id)
-            new_count += 1
+        # Extract article fields
+        title = (article_data.get("title", "") or "")[:500]
+        body = article_data.get("body", "") or ""
+        sentiment = article_data.get("sentiment")
+        er_article_uri = str(article_data.get("uri", ""))
 
-        # Update last scraped timestamp
-        source.last_scraped_at = timezone.now()
-        source.save(update_fields=['last_scraped_at'])
+        # Parse published datetime
+        published_at = None
+        date_time = article_data.get("dateTime") or article_data.get("dateTimePub")
+        if date_time:
+            try:
+                from dateutil.parser import parse as parse_date
+                published_at = parse_date(date_time)
+                if timezone.is_naive(published_at):
+                    published_at = timezone.make_aware(published_at)
+            except (ValueError, TypeError):
+                pass
 
-        logger.info(f"Scraped {source.name}: {new_count} new articles")
-        return f"{source.name}: {new_count} new articles"
+        # Extract author
+        authors = article_data.get("authors", [])
+        author = ""
+        if authors and isinstance(authors, list):
+            author_names = [a.get("name", "") for a in authors if isinstance(a, dict)]
+            author = ", ".join(n for n in author_names if n)[:300]
 
-    except Exception as e:
-        logger.error(f"Error scraping {source.name}: {e}")
-        raise self.retry(exc=e, countdown=60 * 5)  # Retry in 5 minutes
+        sim_score = article_data.get("sim", 0.0) or 0.0
 
+        # Detect wire service republication
+        from apps.articles.utils import is_wire_copy
+        wire_flag = is_wire_copy(author, source_uri)
 
-@shared_task(bind=True, max_retries=3)
-def extract_article_content(self, article_id: int):
-    """Extract full article content from URL."""
-    try:
-        article = Article.objects.get(id=article_id)
-    except Article.DoesNotExist:
-        logger.error(f"Article {article_id} not found")
-        return
+        try:
+            with transaction.atomic():
+                article = Article.objects.create(
+                    source=source,
+                    title=title,
+                    url=article_url,
+                    author=author,
+                    published_at=published_at,
+                    content=body,
+                    status=Article.ProcessingStatus.COMPLETE,
+                    event_registry_uri=er_article_uri if er_article_uri else None,
+                    sentiment=sentiment,
+                    is_wire_content=wire_flag,
+                )
 
-    try:
-        extractor = ContentExtractor()
-        content = extractor.extract(article.url)
+                ArticleCluster.objects.create(
+                    topic=topic,
+                    article=article,
+                    confidence_score=sim_score,
+                    cluster_rank=rank,
+                )
 
-        # Update article with extracted content
-        if content['content']:
-            article.content = content['content']
-            article.status = Article.ProcessingStatus.SCRAPED
+                # Queue analysis only after article is committed to DB
+                from apps.analysis.tasks import analyze_article
+                article_id = article.id
+                if sync:
+                    transaction.on_commit(lambda aid=article_id: analyze_article(aid))
+                else:
+                    transaction.on_commit(lambda aid=article_id: analyze_article.delay(aid))
+        except IntegrityError:
+            # Article URL already exists (concurrent worker created it) — skip
+            continue
 
-            # Update metadata if better than what we have
-            if content['title'] and not article.title:
-                article.title = content['title'][:500]
-            if content['author'] and not article.author:
-                article.author = content['author'][:300]
-            if content['summary'] and not article.summary:
-                article.summary = content['summary'][:500]
-            if content['date'] and not article.published_at:
-                article.published_at = content['date']
+        rank += 1
+        new_count += 1
 
-            article.save()
+    # Update topic metrics
+    topic.update_metrics()
 
-            from apps.topics.tasks import generate_article_embedding
-            generate_article_embedding.delay(article.id)
-            return f"Extracted {article.word_count} words"
-
-        else:
-            article.status = Article.ProcessingStatus.FAILED
-            article.error_message = "No content extracted"
-            article.save()
-            return "No content extracted"
-
-    except Exception as e:
-        article.status = Article.ProcessingStatus.FAILED
-        article.error_message = str(e)[:500]
-        article.save()
-        logger.error(f"Error extracting article {article_id}: {e}")
-        raise self.retry(exc=e, countdown=60)
+    logger.info(f"Event {event_uri}: ingested {new_count} articles")
+    return f"{new_count} articles ingested for event {event_uri}"
 
 
 @shared_task
-def cleanup_failed_articles(days_old: int = 7):
-    """Remove failed articles older than N days."""
-    from datetime import timedelta
+def cleanup_old_topics(days_old=30):
+    """Remove topics older than N days with no recent articles."""
     cutoff = timezone.now() - timedelta(days=days_old)
 
-    deleted, _ = Article.objects.filter(
-        status=Article.ProcessingStatus.FAILED,
+    old_topics = Topic.objects.filter(
+        last_article_at__lt=cutoff
+    ) | Topic.objects.filter(
+        last_article_at__isnull=True,
         created_at__lt=cutoff
-    ).delete()
+    )
 
-    logger.info(f"Cleaned up {deleted} failed articles")
-    return f"Deleted {deleted} failed articles"
+    count = old_topics.count()
+    old_topics.delete()
+
+    logger.info(f"Cleaned up {count} old topics")
+    return f"Deleted {count} old topics"

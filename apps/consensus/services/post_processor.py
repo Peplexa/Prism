@@ -1,0 +1,721 @@
+"""
+Post-processing layer for consensus nugget clusters.
+
+Sits between deduplication and scoring in the pipeline:
+  1. Cluster Merge    — LLM merges each cluster's raw members into one
+                        maximally-informative representative.
+  2. Tier Assignment  — LLM assigns tiers (1/2/3) to all merged facts.
+  3. Theme Assignment — LLM groups facts into 5-8 named themes.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import dataclass
+
+from django.conf import settings
+
+from apps.extraction.services.llm_client import get_llm_client
+
+from ..models import ConsensusNugget, ConsensusPool, RawNugget
+
+logger = logging.getLogger(__name__)
+
+
+# ─── Merge prompts ───────────────────────────────────────────────────────────
+
+MERGE_SYSTEM_PROMPT = """\
+You are a fact editor. You receive clusters of near-duplicate news facts \
+extracted from different sources covering the same event. Each cluster contains \
+variants of the same underlying fact.
+
+For each cluster, produce ONE merged fact following these rules:
+
+1. PRESERVE the most specific numbers, times, scores, and statistics from any variant. \
+If one says "scored" and another says "scored with 7:42 left in the third period," keep the time.
+2. PRESERVE proper nouns and full names. Never shorten "Ondrej Palat" to "Palat" if any variant \
+has the full name.
+3. COMBINE complementary details. If one variant has the score context ("gave Czechia a 3-2 lead") \
+and another has the timing ("with 7:42 left"), the merged fact should include both.
+4. Keep attribution when present. If a variant says 'according to officials,' keep that.
+5. Do NOT add information that isn't in any variant. Do NOT editorialize or interpret.
+6. Do NOT start with "The." Write a direct declarative sentence.
+7. One sentence only, 8-25 words. If combining details pushes past 25 words, keep the \
+most specific version and drop the least informative detail.
+8. If all variants say essentially the same thing with no complementary details, \
+pick the most precise and complete wording verbatim."""
+
+MERGE_USER_TEMPLATE = """\
+Event: {topic_title}
+
+Merge each cluster into one fact. Return ONLY a JSON array of strings, one per cluster, same order.
+
+{clusters_block}"""
+
+
+# ─── Tier prompts ────────────────────────────────────────────────────────────
+
+TIER_SYSTEM_PROMPT = """\
+You are a senior news editor assigning importance tiers to facts about a news event.
+
+Tier 1 (Headline): The {tier1_target} most essential facts — final outcome, main result, the single \
+biggest development. A reader who sees ONLY these facts should understand what happened.
+Tier 2 (Context): ~{tier2_target} facts that explain how/why — key plays, significant \
+figures, important consequences, timeline of events.
+Tier 3 (Detail): Everything else — minor statistics, background color, quotes, \
+historical parallels, peripheral storylines.
+
+Rules:
+- Assign EXACTLY {tier1_target} facts to Tier 1 (unless there are fewer than {tier1_target} total facts).
+- Tier 2 should be approximately {tier2_target} facts, but use your judgment.
+- Everything else is Tier 3.
+- Source count is a signal (widely reported facts are more likely important) but not the only one. \
+A fact reported by 2 sources can be Tier 1 if it's the core outcome.
+
+Output ONLY a JSON array of integers (1, 2, or 3), one per input fact, in the same order."""
+
+TIER_USER_TEMPLATE = """\
+Event: {topic_title}
+
+Facts:
+{facts_block}
+
+Assign a tier (1, 2, or 3) to each fact."""
+
+RETIER_SYSTEM_PROMPT = """\
+You are a senior news editor. You are given a list of candidate headline facts for a news event. \
+Too many were selected. Pick exactly {tier1_target} that are the most essential — the facts a reader \
+absolutely must know to understand what happened.
+
+Output ONLY a JSON array of the selected fact numbers (1-indexed)."""
+
+RETIER_USER_TEMPLATE = """\
+Event: {topic_title}
+
+Select exactly {tier1_target} headline facts from these candidates:
+{candidates_block}"""
+
+
+# ─── Theme prompts ──────────────────────────────────────────────────────────
+
+THEME_SYSTEM_PROMPT = """\
+You are a news editor organizing facts about an event into thematic groups.
+
+Group the numbered facts into {min_themes}-{max_themes} themes. Each theme should have \
+a short, descriptive name (2-5 words, e.g. "Legal Proceedings", "Community Response", \
+"Financial Impact").
+
+Rules:
+- Every fact MUST be assigned to exactly one theme.
+- Aim for {min_themes}-{max_themes} themes. Use fewer only if the facts are very uniform.
+- Theme names should be specific to this event, not generic (prefer "Verdict & Damages" \
+over "Legal").
+- Order themes by importance: the most newsworthy theme first.
+
+Output ONLY a JSON object with this structure:
+{{"themes": [{{"name": "Theme Name", "facts": [1, 3, 7]}}, ...]}}
+where "facts" contains the 1-indexed fact numbers."""
+
+THEME_USER_TEMPLATE = """\
+Event: {topic_title}
+
+Facts:
+{facts_block}
+
+Group these facts into {min_themes}-{max_themes} named themes."""
+
+
+# ─── Data classes ─────────────────────────────────────────────────────────────
+
+@dataclass
+class PostProcessingResult:
+    """Outcome of the full post-processing pass."""
+    nuggets_merged: int
+    tier1_count: int
+    tier2_count: int
+    tier3_count: int
+    theme_count: int = 0
+
+
+# ─── Service ──────────────────────────────────────────────────────────────────
+
+class NuggetPostProcessor:
+    """
+    LLM-based post-processing for consensus nuggets.
+
+    Call process(pool) after deduplication and before scoring.
+    """
+
+    def __init__(self, backend: str | None = None):
+        self.backend = backend or getattr(settings, 'LLM_BACKEND', 'deepseek')
+        self.client = get_llm_client(self.backend)
+        self.merge_batch_size = getattr(
+            settings, 'CONSENSUS_MERGE_BATCH_SIZE', 30
+        )
+        self.tier1_target = getattr(settings, 'CONSENSUS_TIER1_TARGET', 5)
+        self.tier2_target = getattr(settings, 'CONSENSUS_TIER2_TARGET', 15)
+
+    def process(self, pool: ConsensusPool) -> PostProcessingResult:
+        """Run merge, tier assignment, then theme grouping."""
+        nuggets_merged = self._merge_clusters(pool)
+        tier1, tier2, tier3 = self._assign_tiers(pool)
+        theme_count = self._assign_themes(pool)
+
+        return PostProcessingResult(
+            nuggets_merged=nuggets_merged,
+            tier1_count=tier1,
+            tier2_count=tier2,
+            tier3_count=tier3,
+            theme_count=theme_count,
+        )
+
+    # ── Step 1: Merge ────────────────────────────────────────────────────────
+
+    def _merge_clusters(self, pool: ConsensusPool) -> int:
+        """
+        LLM-merge multi-member clusters into single maximally-informative facts.
+
+        Returns number of nuggets whose text was updated.
+        """
+        # Load consensus nuggets with their raw members
+        nuggets = list(
+            pool.nuggets
+            .prefetch_related('raw_nuggets')
+            .order_by('cluster_id')
+        )
+
+        if not nuggets:
+            return 0
+
+        # Identify multi-member clusters (worth merging)
+        multi_member = []
+        for cn in nuggets:
+            raw_texts = list(cn.raw_nuggets.values_list('nugget_text', flat=True))
+            if len(raw_texts) > 1:
+                multi_member.append((cn, raw_texts))
+
+        if not multi_member:
+            logger.info("No multi-member clusters to merge")
+            return 0
+
+        # Process in batches
+        merged_count = 0
+        for batch_start in range(0, len(multi_member), self.merge_batch_size):
+            batch = multi_member[batch_start:batch_start + self.merge_batch_size]
+            merged_count += self._merge_batch(pool, batch)
+
+        return merged_count
+
+    def _merge_batch(
+        self,
+        pool: ConsensusPool,
+        batch: list[tuple[ConsensusNugget, list[str]]],
+    ) -> int:
+        """Merge a batch of clusters via a single LLM call."""
+        # Build the clusters block
+        cluster_lines = []
+        for i, (cn, raw_texts) in enumerate(batch, 1):
+            members = "\n".join(
+                f'  {chr(96 + j)}) "{text}"'
+                for j, text in enumerate(raw_texts, 1)
+                if j <= 26  # safety: max 26 lettered items
+            )
+            cluster_lines.append(
+                f"Cluster {i} ({cn.source_count} sources):\n{members}"
+            )
+
+        clusters_block = "\n\n".join(cluster_lines)
+
+        user_prompt = MERGE_USER_TEMPLATE.format(
+            topic_title=pool.topic.title,
+            clusters_block=clusters_block,
+        )
+
+        try:
+            response = self.client.generate(
+                prompt=user_prompt,
+                system=MERGE_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            merged_texts = self._parse_json_string_array(response, len(batch))
+        except Exception as e:
+            logger.warning(f"Merge LLM call failed, keeping originals: {e}")
+            return 0
+
+        # Apply merged texts
+        updated = []
+        for i, (cn, _raw_texts) in enumerate(batch):
+            if i < len(merged_texts) and merged_texts[i]:
+                cn.nugget_text = merged_texts[i]
+                updated.append(cn)
+
+        if updated:
+            ConsensusNugget.objects.bulk_update(updated, ['nugget_text'])
+
+        logger.debug(f"Merged {len(updated)}/{len(batch)} clusters in batch")
+        return len(updated)
+
+    # ── Step 2: Tier ─────────────────────────────────────────────────────────
+
+    def _assign_tiers(
+        self, pool: ConsensusPool
+    ) -> tuple[int, int, int]:
+        """
+        LLM-assign importance tiers to all consensus nuggets.
+
+        Returns (tier1_count, tier2_count, tier3_count).
+        """
+        nuggets = list(pool.nuggets.order_by('-source_count', 'id'))
+
+        if not nuggets:
+            return 0, 0, 0
+
+        chunk_size = 200
+        if len(nuggets) <= chunk_size:
+            tiers = self._tier_chunk(pool, nuggets)
+        else:
+            tiers = self._tier_chunked(pool, nuggets, chunk_size)
+
+        # Apply tiers
+        updated = []
+        for i, cn in enumerate(nuggets):
+            if i < len(tiers):
+                cn.tier = tiers[i]
+            else:
+                cn.tier = 3  # default untiered to detail
+            updated.append(cn)
+
+        ConsensusNugget.objects.bulk_update(updated, ['tier'])
+
+        tier1 = sum(1 for t in tiers if t == 1)
+        tier2 = sum(1 for t in tiers if t == 2)
+        tier3 = len(nuggets) - tier1 - tier2
+
+        logger.info(
+            f"Tiered {len(nuggets)} nuggets: "
+            f"{tier1} headline, {tier2} context, {tier3} detail"
+        )
+        return tier1, tier2, tier3
+
+    def _tier_chunk(
+        self,
+        pool: ConsensusPool,
+        nuggets: list[ConsensusNugget],
+    ) -> list[int]:
+        """Assign tiers to a single chunk of nuggets via LLM."""
+        facts_block = "\n".join(
+            f"[{i + 1}] {cn.nugget_text} ({cn.source_count} sources)"
+            for i, cn in enumerate(nuggets)
+        )
+
+        system = TIER_SYSTEM_PROMPT.format(
+            tier1_target=self.tier1_target,
+            tier2_target=self.tier2_target,
+        )
+        user_prompt = TIER_USER_TEMPLATE.format(
+            topic_title=pool.topic.title,
+            facts_block=facts_block,
+        )
+
+        # Scale max_tokens: ~3 tokens per item, with headroom
+        tier_max_tokens = max(4096, len(nuggets) * 4 + 512)
+
+        try:
+            response = self.client.generate(
+                prompt=user_prompt,
+                system=system,
+                temperature=0.1,
+                max_tokens=tier_max_tokens,
+            )
+            tiers = self._parse_tier_array(response, len(nuggets))
+            # Sanity check: if tiering clearly failed (>95% tier 3), log warning
+            tier3_pct = sum(1 for t in tiers if t == 3) / len(tiers)
+            if tier3_pct > 0.95 and len(nuggets) > 20:
+                logger.warning(
+                    f"Tier response degenerate ({tier3_pct:.0%} tier-3), "
+                    f"response length={len(response)}"
+                )
+            return tiers
+        except Exception as e:
+            logger.warning(f"Tier LLM call failed: {e}")
+            return [3] * len(nuggets)
+
+    def _tier_chunked(
+        self,
+        pool: ConsensusPool,
+        nuggets: list[ConsensusNugget],
+        chunk_size: int,
+    ) -> list[int]:
+        """Tier nuggets in chunks, then re-tier if too many tier-1 facts."""
+        all_tiers = [3] * len(nuggets)
+
+        for start in range(0, len(nuggets), chunk_size):
+            chunk = nuggets[start:start + chunk_size]
+            chunk_tiers = self._tier_chunk(pool, chunk)
+            for i, tier in enumerate(chunk_tiers):
+                if start + i < len(all_tiers):
+                    all_tiers[start + i] = tier
+
+        # Re-tier pass if too many tier-1 facts
+        tier1_indices = [i for i, t in enumerate(all_tiers) if t == 1]
+        max_tier1 = int(self.tier1_target * 1.5)
+
+        if len(tier1_indices) > max_tier1:
+            logger.info(
+                f"Re-tiering: {len(tier1_indices)} tier-1 candidates "
+                f"(target {self.tier1_target})"
+            )
+            all_tiers = self._retier_pass(
+                pool, nuggets, all_tiers, tier1_indices
+            )
+
+        return all_tiers
+
+    def _retier_pass(
+        self,
+        pool: ConsensusPool,
+        nuggets: list[ConsensusNugget],
+        all_tiers: list[int],
+        tier1_indices: list[int],
+    ) -> list[int]:
+        """Re-tier tier-1 candidates to select exactly tier1_target."""
+        candidates_block = "\n".join(
+            f"[{j + 1}] {nuggets[i].nugget_text} ({nuggets[i].source_count} sources)"
+            for j, i in enumerate(tier1_indices)
+        )
+
+        system = RETIER_SYSTEM_PROMPT.format(tier1_target=self.tier1_target)
+        user_prompt = RETIER_USER_TEMPLATE.format(
+            topic_title=pool.topic.title,
+            tier1_target=self.tier1_target,
+            candidates_block=candidates_block,
+        )
+
+        try:
+            response = self.client.generate(
+                prompt=user_prompt,
+                system=system,
+                temperature=0.1,
+                max_tokens=1024,
+            )
+            selected = self._parse_selected_indices(
+                response, len(tier1_indices)
+            )
+        except Exception as e:
+            logger.warning(f"Re-tier LLM call failed: {e}")
+            # Fallback: keep top N by source_count
+            sorted_candidates = sorted(
+                tier1_indices,
+                key=lambda i: nuggets[i].source_count,
+                reverse=True,
+            )
+            selected = set(range(1, self.tier1_target + 1))
+            # Map back: selected refers to 1-indexed positions in candidates
+            keep_indices = set(sorted_candidates[:self.tier1_target])
+            for i in tier1_indices:
+                if i not in keep_indices:
+                    all_tiers[i] = 2
+            return all_tiers
+
+        # Apply: demote non-selected tier-1 candidates to tier 2
+        selected_original_indices = set()
+        for sel_num in selected:
+            if 1 <= sel_num <= len(tier1_indices):
+                selected_original_indices.add(tier1_indices[sel_num - 1])
+
+        for i in tier1_indices:
+            if i not in selected_original_indices:
+                all_tiers[i] = 2
+
+        return all_tiers
+
+    # ── Step 3: Theme ─────────────────────────────────────────────────────────
+
+    def _assign_themes(self, pool: ConsensusPool) -> int:
+        """
+        LLM-assign thematic groups to consensus nuggets.
+
+        Only themes tier 1 & 2 nuggets (the ones users actually see).
+        Returns number of themes created.
+        """
+        nuggets = list(
+            pool.nuggets
+            .order_by('tier', '-source_count', 'id')
+        )
+
+        if not nuggets:
+            return 0
+
+        # Build numbered fact list for the LLM
+        facts_block = "\n".join(
+            f"[{i + 1}] {cn.nugget_text} ({cn.source_count} sources)"
+            for i, cn in enumerate(nuggets)
+        )
+
+        num_nuggets = len(nuggets)
+        min_themes = max(3, min(5, num_nuggets // 3))
+        max_themes = min(8, max(min_themes, num_nuggets // 2))
+
+        system = THEME_SYSTEM_PROMPT.format(
+            min_themes=min_themes,
+            max_themes=max_themes,
+        )
+        user_prompt = THEME_USER_TEMPLATE.format(
+            topic_title=pool.topic.title,
+            facts_block=facts_block,
+            min_themes=min_themes,
+            max_themes=max_themes,
+        )
+
+        try:
+            response = self.client.generate(
+                prompt=user_prompt,
+                system=system,
+                temperature=0.2,
+                max_tokens=4096,
+            )
+            themes = self._parse_theme_response(response, num_nuggets)
+        except Exception as e:
+            logger.warning(f"Theme LLM call failed: {e}")
+            return 0
+
+        if not themes:
+            return 0
+
+        # Apply themes to nuggets
+        updated = []
+        for order, theme_group in enumerate(themes, 1):
+            name = theme_group['name']
+            for fact_idx in theme_group['facts']:
+                if 0 <= fact_idx < len(nuggets):
+                    nuggets[fact_idx].theme = name
+                    nuggets[fact_idx].theme_order = order
+                    updated.append(nuggets[fact_idx])
+
+        # Assign unthemed nuggets to a catch-all
+        themed_ids = {cn.id for cn in updated}
+        for cn in nuggets:
+            if cn.id not in themed_ids:
+                cn.theme = 'Other Details'
+                cn.theme_order = len(themes) + 1
+                updated.append(cn)
+
+        if updated:
+            ConsensusNugget.objects.bulk_update(
+                updated, ['theme', 'theme_order']
+            )
+
+        logger.info(
+            f"Assigned {len(themes)} themes to {len(updated)} nuggets"
+        )
+        return len(themes)
+
+    @classmethod
+    def _parse_theme_response(
+        cls, response: str, num_facts: int
+    ) -> list[dict] | None:
+        """
+        Parse LLM theme response into list of
+        [{"name": str, "facts": [0-indexed ints]}, ...].
+        """
+        response = cls._clean_response(response)
+
+        # Try to extract JSON object
+        parsed = None
+        try:
+            parsed = json.loads(response)
+        except json.JSONDecodeError:
+            match = re.search(r'\{.*\}', response, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+
+        if not parsed or not isinstance(parsed, dict):
+            logger.warning(
+                f"Could not parse theme response: {response[:200]}..."
+            )
+            return None
+
+        raw_themes = parsed.get('themes', [])
+        if not isinstance(raw_themes, list) or not raw_themes:
+            return None
+
+        # Convert 1-indexed fact numbers to 0-indexed
+        themes = []
+        for item in raw_themes:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get('name', '')).strip()
+            facts = item.get('facts', [])
+            if not name or not facts:
+                continue
+            indices = []
+            for f in facts:
+                try:
+                    idx = int(f) - 1  # 1-indexed → 0-indexed
+                    if 0 <= idx < num_facts:
+                        indices.append(idx)
+                except (ValueError, TypeError):
+                    pass
+            if indices:
+                themes.append({'name': name, 'facts': indices})
+
+        return themes if themes else None
+
+    # ── Parsing helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _clean_response(response: str) -> str:
+        """Strip thinking tags and whitespace from LLM response."""
+        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+        return response.strip()
+
+    @classmethod
+    def _parse_json_string_array(
+        cls, response: str, expected_count: int
+    ) -> list[str]:
+        """
+        Parse LLM response into a list of strings (for merge step).
+
+        Falls back gracefully: returns partial results padded with empty
+        strings for missing positions.
+        """
+        response = cls._clean_response(response)
+
+        # Try direct JSON parse
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, list):
+                result = [str(item) for item in parsed]
+                # Pad if short
+                while len(result) < expected_count:
+                    result.append('')
+                return result[:expected_count]
+        except json.JSONDecodeError:
+            pass
+
+        # Try regex extraction
+        match = re.search(r'\[.*\]', response, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    result = [str(item) for item in parsed]
+                    while len(result) < expected_count:
+                        result.append('')
+                    return result[:expected_count]
+            except json.JSONDecodeError:
+                pass
+
+        logger.warning(
+            f"Could not parse merge response as JSON array. "
+            f"Response: {response[:200]}..."
+        )
+        return [''] * expected_count
+
+    @classmethod
+    def _parse_tier_array(
+        cls, response: str, expected_count: int
+    ) -> list[int]:
+        """
+        Parse LLM response into a list of tier integers (1, 2, or 3).
+
+        Falls back to tier 3 for unparseable positions.
+        """
+        response = cls._clean_response(response)
+
+        # Try direct JSON parse
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, list):
+                return cls._convert_tiers(parsed, expected_count)
+        except json.JSONDecodeError:
+            pass
+
+        # Try regex extraction
+        match = re.search(r'\[.*\]', response, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    return cls._convert_tiers(parsed, expected_count)
+            except json.JSONDecodeError:
+                pass
+
+        # Line-by-line fallback: look for digits 1/2/3
+        tiers = []
+        for line in response.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            # Look for a standalone digit 1, 2, or 3
+            digit_match = re.search(r'\b([123])\b', line)
+            if digit_match:
+                tiers.append(int(digit_match.group(1)))
+
+        if tiers:
+            while len(tiers) < expected_count:
+                tiers.append(3)
+            return tiers[:expected_count]
+
+        logger.warning(
+            f"Could not parse tier response. "
+            f"Response: {response[:200]}..."
+        )
+        return [3] * expected_count
+
+    @staticmethod
+    def _convert_tiers(raw: list, expected_count: int) -> list[int]:
+        """Convert raw parsed values to valid tier integers."""
+        tiers = []
+        for item in raw:
+            try:
+                val = int(item)
+                tiers.append(val if val in (1, 2, 3) else 3)
+            except (ValueError, TypeError):
+                tiers.append(3)
+
+        while len(tiers) < expected_count:
+            tiers.append(3)
+        return tiers[:expected_count]
+
+    @classmethod
+    def _parse_selected_indices(
+        cls, response: str, candidate_count: int
+    ) -> set[int]:
+        """Parse re-tier response into a set of 1-indexed selected positions."""
+        response = cls._clean_response(response)
+
+        # Try JSON array of ints
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, list):
+                return {
+                    int(x) for x in parsed
+                    if 1 <= int(x) <= candidate_count
+                }
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+        match = re.search(r'\[.*\]', response, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    return {
+                        int(x) for x in parsed
+                        if 1 <= int(x) <= candidate_count
+                    }
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+
+        # Fallback: extract all numbers from response
+        numbers = re.findall(r'\b(\d+)\b', response)
+        return {
+            int(n) for n in numbers
+            if 1 <= int(n) <= candidate_count
+        }

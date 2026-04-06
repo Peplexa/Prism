@@ -66,3 +66,17 @@ coverage.xml
 # OS
 .DS_Store
 Thumbs.db
+
+# Data (large datasets)
+data/
+
+# Word temp files
+~$*.docx
+
+# Artifacts
+nul
+=4.36
+
+# Project config
+.claude/
+CLAUDE.md

@@ -8,263 +8,269 @@ from django.utils import timezone
 
 from apps.articles.models import Source, Article
 from apps.articles.tasks import (
-    scrape_all_sources,
-    scrape_source,
-    extract_article_content,
-    cleanup_failed_articles,
+    fetch_events,
+    fetch_event_articles,
+    cleanup_old_topics,
+    _get_or_create_topic,
 )
 from apps.topics.models import Topic, ArticleCluster
-from apps.topics.tasks import (
-    generate_article_embedding,
-    cluster_recent_articles,
-    update_trending_scores,
-)
+from apps.topics.tasks import update_trending_scores
 
 
-class TestArticleTasks:
-    """Tests for article-related Celery tasks."""
+SAMPLE_EVENT = {
+    "uri": "eng-123456",
+    "title": {"eng": "Major Event Happened"},
+    "summary": {"eng": "Summary of the major event."},
+    "eventDate": "2024-01-15",
+    "concepts": [
+        {"label": {"eng": "Politics"}, "type": "wiki"},
+        {"label": {"eng": "United States"}, "type": "loc"},
+    ],
+}
 
-    def test_scrape_all_sources(self, source_npr, source_fox):
-        """Test that scrape_all_sources queues tasks for all active sources."""
-        with patch('apps.articles.tasks.scrape_source.delay') as mock_delay:
-            result = scrape_all_sources()
+SAMPLE_ARTICLE = {
+    "uri": "article-789",
+    "url": "https://www.npr.org/2024/01/15/major-event",
+    "title": "NPR Coverage of Major Event",
+    "body": "Full article body text here. " * 50,
+    "dateTime": "2024-01-15T14:30:00Z",
+    "sentiment": 0.15,
+    "sim": 0.92,
+    "source": {
+        "uri": "npr.org",
+        "title": "NPR",
+    },
+    "authors": [
+        {"name": "John Reporter"},
+    ],
+}
 
-        assert mock_delay.call_count == 2
-        assert 'Queued 2 sources' in result
 
-    def test_scrape_all_sources_skips_inactive(self, source_npr, source_fox):
-        """Test that inactive sources are skipped."""
-        source_fox.is_active = False
-        source_fox.save()
+class TestGetOrCreateTopic:
+    """Tests for the _get_or_create_topic helper."""
 
-        with patch('apps.articles.tasks.scrape_source.delay') as mock_delay:
-            result = scrape_all_sources()
+    def test_creates_topic(self, db):
+        """Test that a new topic is created from event data."""
+        topic, created = _get_or_create_topic(SAMPLE_EVENT)
 
-        assert mock_delay.call_count == 1
+        assert topic is not None
+        assert created is True
+        assert topic.title == "Major Event Happened"
+        assert topic.event_registry_uri == "eng-123456"
+        assert "Politics" in topic.keywords
+        assert "United States" in topic.keywords
 
-    @patch('apps.articles.tasks.RSSScraper')
-    def test_scrape_source_creates_articles(self, mock_scraper_class, source_npr):
-        """Test that scrape_source creates new articles."""
-        mock_scraper = MagicMock()
-        mock_scraper.discover_articles.return_value = [
-            {
-                'url': 'https://npr.org/new-article',
-                'title': 'New Article',
-                'summary': 'Article summary',
-                'author': 'Author',
-                'published_at': timezone.now(),
-            }
-        ]
-        mock_scraper_class.return_value = mock_scraper
+    def test_returns_existing_event(self, db):
+        """Test that duplicate events return existing topic."""
+        _get_or_create_topic(SAMPLE_EVENT)
+        topic, created = _get_or_create_topic(SAMPLE_EVENT)
 
-        with patch('apps.articles.tasks.extract_article_content.delay'):
-            result = scrape_source(source_npr.id)
+        assert topic is not None
+        assert created is False
+        assert Topic.objects.filter(event_registry_uri="eng-123456").count() == 1
 
-        assert Article.objects.filter(url='https://npr.org/new-article').exists()
-        assert '1 new articles' in result
+    def test_skips_event_without_uri(self, db):
+        """Test that events without URI are skipped."""
+        topic, created = _get_or_create_topic({"title": {"eng": "No URI"}})
+        assert topic is None
 
-    @patch('apps.articles.tasks.RSSScraper')
-    def test_scrape_source_skips_duplicates(self, mock_scraper_class, source_npr, article_npr):
-        """Test that existing articles are not duplicated."""
-        mock_scraper = MagicMock()
-        mock_scraper.discover_articles.return_value = [
-            {
-                'url': article_npr.url,  # Existing URL
-                'title': 'Duplicate Article',
-                'summary': 'Summary',
-                'author': '',
-                'published_at': timezone.now(),
-            }
-        ]
-        mock_scraper_class.return_value = mock_scraper
+    def test_skips_event_without_title(self, db):
+        """Test that events without title are skipped."""
+        topic, created = _get_or_create_topic({"uri": "eng-999", "title": {}})
+        assert topic is None
+
+    def test_generates_unique_slugs(self, db):
+        """Test that duplicate titles get unique slugs."""
+        event1 = {**SAMPLE_EVENT, "uri": "eng-1"}
+        event2 = {**SAMPLE_EVENT, "uri": "eng-2"}
+
+        topic1, _ = _get_or_create_topic(event1)
+        topic2, _ = _get_or_create_topic(event2)
+
+        assert topic1.slug != topic2.slug
+
+
+class TestFetchEvents:
+    """Tests for the fetch_events task."""
+
+    @patch('apps.articles.services.EventRegistryClient')
+    def test_fetch_events_queues_article_fetching(self, mock_client_class, db):
+        """Test that fetch_events queues article fetching with event data."""
+        mock_client = MagicMock()
+        mock_client.fetch_recent_events.return_value = [SAMPLE_EVENT]
+        mock_client_class.return_value = mock_client
+
+        with patch('apps.articles.tasks.fetch_event_articles.delay') as mock_delay:
+            result = fetch_events()
+
+        assert '1 new events' in result
+        # Topic is NOT created yet — deferred to fetch_event_articles
+        assert not Topic.objects.filter(event_registry_uri="eng-123456").exists()
+        mock_delay.assert_called_once_with("eng-123456", None, False, SAMPLE_EVENT)
+
+    @patch('apps.articles.services.EventRegistryClient')
+    def test_fetch_events_skips_existing(self, mock_client_class, db):
+        """Test that existing events are skipped."""
+        Topic.objects.create(
+            title="Existing",
+            slug="existing",
+            event_registry_uri="eng-123456",
+        )
+
+        mock_client = MagicMock()
+        mock_client.fetch_recent_events.return_value = [SAMPLE_EVENT]
+        mock_client_class.return_value = mock_client
+
+        with patch('apps.articles.tasks.fetch_event_articles.delay') as mock_delay:
+            result = fetch_events()
+
+        assert '0 new events' in result
+        mock_delay.assert_not_called()
+
+
+class TestFetchEventArticles:
+    """Tests for the fetch_event_articles task."""
+
+    @patch('apps.analysis.tasks.analyze_article')
+    @patch('apps.articles.services.EventRegistryClient')
+    def test_ingests_articles_from_tracked_sources(
+        self, mock_client_class, mock_analyze, source_npr, topic
+    ):
+        """Test that articles from tracked sources are ingested."""
+        mock_client = MagicMock()
+        mock_client.fetch_event_articles.return_value = [SAMPLE_ARTICLE]
+        mock_client_class.return_value = mock_client
+
+        result = fetch_event_articles(topic.event_registry_uri, topic.id)
+
+        assert '1 articles ingested' in result
+        article = Article.objects.get(url=SAMPLE_ARTICLE["url"])
+        assert article.source == source_npr
+        assert article.sentiment == 0.15
+        assert article.status == Article.ProcessingStatus.COMPLETE
+        assert article.event_registry_uri == "article-789"
+        assert ArticleCluster.objects.filter(
+            topic=topic, article=article
+        ).exists()
+
+    @patch('apps.analysis.tasks.analyze_article')
+    @patch('apps.articles.services.EventRegistryClient')
+    def test_auto_creates_unknown_sources(
+        self, mock_client_class, mock_analyze, source_npr, topic
+    ):
+        """Test that articles from unknown sources auto-create the source."""
+        unknown_article = {
+            **SAMPLE_ARTICLE,
+            "uri": "article-999",
+            "url": "https://unknown.com/article",
+            "source": {"uri": "unknown.com", "title": "Unknown"},
+        }
+
+        mock_client = MagicMock()
+        mock_client.fetch_event_articles.return_value = [unknown_article]
+        mock_client_class.return_value = mock_client
+
+        result = fetch_event_articles(topic.event_registry_uri, topic.id)
+
+        assert '1 articles ingested' in result
+        assert Source.objects.filter(event_registry_uri='unknown.com').exists()
+
+    @patch('apps.articles.services.EventRegistryClient')
+    def test_skips_duplicate_urls(
+        self, mock_client_class, source_npr, article_npr, topic
+    ):
+        """Test that articles with existing URLs are skipped."""
+        duplicate_article = {
+            **SAMPLE_ARTICLE,
+            "url": article_npr.url,
+        }
+
+        mock_client = MagicMock()
+        mock_client.fetch_event_articles.return_value = [duplicate_article]
+        mock_client_class.return_value = mock_client
 
         initial_count = Article.objects.count()
-
-        with patch('apps.articles.tasks.extract_article_content.delay'):
-            scrape_source(source_npr.id)
+        fetch_event_articles(topic.event_registry_uri, topic.id)
 
         assert Article.objects.count() == initial_count
 
-    @patch('apps.articles.tasks.ContentExtractor')
-    def test_extract_article_content_success(self, mock_extractor_class, article_npr):
-        """Test successful content extraction."""
-        mock_extractor = MagicMock()
-        mock_extractor.extract.return_value = {
-            'content': 'Extracted content here.',
-            'title': 'Extracted Title',
-            'author': 'Extracted Author',
-            'summary': 'Extracted summary',
-            'date': timezone.now(),
+    @patch('apps.analysis.tasks.analyze_article')
+    @patch('apps.articles.services.EventRegistryClient')
+    def test_updates_topic_metrics(
+        self, mock_client_class, mock_analyze, source_npr, source_fox, topic
+    ):
+        """Test that topic metrics are updated after article ingestion."""
+        fox_article = {
+            **SAMPLE_ARTICLE,
+            "uri": "article-fox",
+            "url": "https://foxnews.com/event-article",
+            "source": {"uri": "foxnews.com", "title": "Fox News"},
         }
-        mock_extractor_class.return_value = mock_extractor
 
-        article_npr.status = Article.ProcessingStatus.PENDING
-        article_npr.save()
+        mock_client = MagicMock()
+        mock_client.fetch_event_articles.return_value = [
+            SAMPLE_ARTICLE, fox_article
+        ]
+        mock_client_class.return_value = mock_client
 
-        with patch('apps.topics.tasks.generate_article_embedding.delay'):
-            result = extract_article_content(article_npr.id)
+        fetch_event_articles(topic.event_registry_uri, topic.id)
 
-        article_npr.refresh_from_db()
-        assert article_npr.content == 'Extracted content here.'
-        assert article_npr.status == Article.ProcessingStatus.SCRAPED
+        topic.refresh_from_db()
+        assert topic.article_count == 2
+        assert topic.source_count == 2
 
-    @patch('apps.articles.tasks.ContentExtractor')
-    def test_extract_article_content_failure(self, mock_extractor_class, article_npr):
-        """Test handling of extraction failure."""
-        mock_extractor = MagicMock()
-        mock_extractor.extract.return_value = {
-            'content': '',
-            'title': '',
-            'author': '',
-            'summary': '',
-            'date': None,
-        }
-        mock_extractor_class.return_value = mock_extractor
-
-        result = extract_article_content(article_npr.id)
-
-        article_npr.refresh_from_db()
-        assert article_npr.status == Article.ProcessingStatus.FAILED
-        assert 'No content extracted' in result
-
-    def test_cleanup_failed_articles(self, source_npr):
-        """Test cleanup of old failed articles."""
-        # Create old failed article
-        old_failed = Article.objects.create(
-            source=source_npr,
-            title='Old Failed Article',
-            url='https://npr.org/old-failed',
-            status=Article.ProcessingStatus.FAILED,
-        )
-        # Manually set created_at to be old
-        Article.objects.filter(pk=old_failed.pk).update(
-            created_at=timezone.now() - timedelta(days=10)
-        )
-
-        # Create recent failed article
-        recent_failed = Article.objects.create(
-            source=source_npr,
-            title='Recent Failed Article',
-            url='https://npr.org/recent-failed',
-            status=Article.ProcessingStatus.FAILED,
-        )
-
-        result = cleanup_failed_articles(days_old=7)
-
-        assert not Article.objects.filter(pk=old_failed.pk).exists()
-        assert Article.objects.filter(pk=recent_failed.pk).exists()
-        assert 'Deleted 1' in result
-
-
-class TestTopicTasks:
-    """Tests for topic-related Celery tasks."""
-
-    @patch('apps.topics.tasks.EmbeddingGenerator')
-    def test_generate_article_embedding(self, mock_generator_class, article_npr):
-        """Test embedding generation for an article."""
-        import numpy as np
-
-        mock_generator = MagicMock()
-        mock_generator.prepare_article_text.return_value = "Article text"
-        mock_generator.generate.return_value = np.random.rand(384)
-        mock_generator_class.return_value = mock_generator
-
-        result = generate_article_embedding(article_npr.id)
-
-        article_npr.refresh_from_db()
-        assert article_npr.embedding is not None
-        assert article_npr.status == Article.ProcessingStatus.EMBEDDED
-
-    def test_generate_article_embedding_wrong_status(self, article_npr):
-        """Test that embedding is skipped for non-scraped articles."""
-        article_npr.status = Article.ProcessingStatus.PENDING
-        article_npr.save()
-
-        result = generate_article_embedding(article_npr.id)
-
-        article_npr.refresh_from_db()
-        assert article_npr.embedding is None
+    def test_handles_missing_topic(self, db):
+        """Test handling of non-existent topic ID."""
+        result = fetch_event_articles("eng-999", 99999)
         assert result is None
 
-    @patch('apps.topics.tasks.ArticleClusterer')
-    def test_cluster_recent_articles(self, mock_clusterer_class, multiple_embedded_articles):
-        """Test clustering of recent articles."""
-        mock_clusterer = MagicMock()
-        mock_clusterer.cluster.return_value = [
-            {
-                'title': 'Test Cluster',
-                'slug': 'test-cluster',
-                'keywords': ['test', 'cluster'],
-                'articles': [
-                    {'id': multiple_embedded_articles[0].id, 'confidence': 0.9, 'rank': 0},
-                    {'id': multiple_embedded_articles[1].id, 'confidence': 0.8, 'rank': 1},
-                    {'id': multiple_embedded_articles[2].id, 'confidence': 0.7, 'rank': 2},
-                ]
-            }
-        ]
-        mock_clusterer_class.return_value = mock_clusterer
 
-        result = cluster_recent_articles(hours=48)
+class TestCleanupOldTopics:
+    """Tests for the cleanup_old_topics task."""
 
-        assert Topic.objects.filter(slug='test-cluster').exists()
-        assert 'Created 1 topics' in result
+    def test_cleanup_old_topics(self, db):
+        """Test that old topics are deleted."""
+        old_topic = Topic.objects.create(
+            title='Old Topic',
+            slug='old-topic',
+            event_registry_uri='eng-old',
+        )
+        Topic.objects.filter(pk=old_topic.pk).update(
+            created_at=timezone.now() - timedelta(days=60),
+        )
 
-    def test_cluster_recent_articles_not_enough(self, article_with_embedding):
-        """Test clustering with insufficient articles."""
-        result = cluster_recent_articles(hours=48)
+        recent_topic = Topic.objects.create(
+            title='Recent Topic',
+            slug='recent-topic',
+            event_registry_uri='eng-recent',
+            last_article_at=timezone.now(),
+        )
 
-        assert 'Not enough articles' in result
+        result = cleanup_old_topics(days_old=30)
+
+        assert 'Deleted 1' in result
+        assert not Topic.objects.filter(pk=old_topic.pk).exists()
+        assert Topic.objects.filter(pk=recent_topic.pk).exists()
+
+
+class TestTrendingScores:
+    """Tests for trending score updates."""
 
     def test_update_trending_scores(self, topic_with_articles):
         """Test trending score updates."""
-        initial_score = topic_with_articles.trending_score
-
         result = update_trending_scores()
 
         topic_with_articles.refresh_from_db()
         assert 'Updated' in result
-        # Score should be calculated (may be different from initial)
         assert topic_with_articles.trending_score is not None
 
-    def test_update_trending_sets_flag(self, topic):
+    def test_trending_flag(self, topic):
         """Test that trending flag is set based on score."""
-        # Create a topic with articles to get a high trending score
         topic.trending_score = 10.0
         topic.save()
 
         update_trending_scores()
 
         topic.refresh_from_db()
-        # With score > 2, should be trending
-        # (though actual behavior depends on article recency)
-
-
-class TestTaskChaining:
-    """Tests for task chaining and workflow."""
-
-    @patch('apps.articles.tasks.ContentExtractor')
-    @patch('apps.topics.tasks.generate_article_embedding.delay')
-    def test_scrape_to_embedding_chain(
-        self, mock_embedding_delay, mock_extractor_class, source_npr
-    ):
-        """Test that content extraction triggers embedding generation."""
-        mock_extractor = MagicMock()
-        mock_extractor.extract.return_value = {
-            'content': 'Some content',
-            'title': '',
-            'author': '',
-            'summary': '',
-            'date': None,
-        }
-        mock_extractor_class.return_value = mock_extractor
-
-        article = Article.objects.create(
-            source=source_npr,
-            title='Chain Test Article',
-            url='https://npr.org/chain-test',
-            status=Article.ProcessingStatus.PENDING,
-        )
-
-        extract_article_content(article.id)
-
-        mock_embedding_delay.assert_called_once_with(article.id)
+        # Score recalculated based on actual articles
+        assert topic.trending_score is not None

@@ -15,10 +15,13 @@
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+    <a href="#main-content" class="visually-hidden-focusable">Skip to main content</a>
+
     <!-- Navigation -->
     <nav class="navbar">
         <div class="container">
             <a href="{% url 'web:home' %}" class="navbar-brand">Prism</a>
+            <button class="navbar-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
             <ul class="navbar-nav">
                 <li><a href="{% url 'web:home' %}" {% if request.resolver_match.url_name == 'home' %}class="active"{% endif %}>Home</a></li>
                 <li><a href="{% url 'web:ideas' %}" {% if request.resolver_match.url_name == 'ideas' %}class="active"{% endif %}>Ideas</a></li>
@@ -27,7 +30,7 @@
     </nav>
 
     <!-- Main Content -->
-    <main>
+    <main id="main-content">
         {% block content %}{% endblock %}
     </main>
 

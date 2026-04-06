@@ -18,8 +18,7 @@ class TestSourceModel:
             name='Test Source',
             slug='test-source',
             website_url='https://example.com',
-            discovery_method=Source.DiscoveryMethod.RSS,
-            discovery_url='https://example.com/rss',
+            event_registry_uri='example.com',
             known_bias=Source.BiasRating.CENTER,
         )
 
@@ -34,8 +33,7 @@ class TestSourceModel:
         source = Source.objects.create(
             name='The New York Times',
             website_url='https://nytimes.com',
-            discovery_method=Source.DiscoveryMethod.RSS,
-            discovery_url='https://nytimes.com/rss',
+            event_registry_uri='nytimes.com',
         )
 
         assert source.slug == 'the-new-york-times'
@@ -46,8 +44,7 @@ class TestSourceModel:
             name='Test Source',
             slug='unique-slug',
             website_url='https://example.com',
-            discovery_method=Source.DiscoveryMethod.RSS,
-            discovery_url='https://example.com/rss',
+            event_registry_uri='example.com',
         )
 
         with pytest.raises(IntegrityError):
@@ -55,8 +52,7 @@ class TestSourceModel:
                 name='Another Source',
                 slug='unique-slug',
                 website_url='https://another.com',
-                discovery_method=Source.DiscoveryMethod.RSS,
-                discovery_url='https://another.com/rss',
+                event_registry_uri='another.com',
             )
 
     def test_source_str(self, source_npr):
@@ -70,8 +66,7 @@ class TestSourceModel:
                 name=f'Source {bias_label}',
                 slug=f'source-{bias_value}',
                 website_url=f'https://{bias_value}.com',
-                discovery_method=Source.DiscoveryMethod.RSS,
-                discovery_url=f'https://{bias_value}.com/rss',
+                event_registry_uri=f'{bias_value}.com',
                 known_bias=bias_value,
             )
             assert source.known_bias == bias_value
@@ -137,13 +132,13 @@ class TestArticleModel:
 
     def test_article_status_transitions(self, article_npr):
         """Test article status can be updated."""
-        assert article_npr.status == Article.ProcessingStatus.SCRAPED
+        assert article_npr.status == Article.ProcessingStatus.COMPLETE
 
-        article_npr.status = Article.ProcessingStatus.EMBEDDED
+        article_npr.status = Article.ProcessingStatus.FAILED
         article_npr.save()
         article_npr.refresh_from_db()
 
-        assert article_npr.status == Article.ProcessingStatus.EMBEDDED
+        assert article_npr.status == Article.ProcessingStatus.FAILED
 
     def test_article_ordering(self, source_npr):
         """Test articles are ordered by published_at descending."""
@@ -165,6 +160,63 @@ class TestArticleModel:
         articles = list(Article.objects.all())
         assert articles[0] == article2
         assert articles[1] == article1
+
+
+class TestWireDetection:
+    """Tests for wire service detection utility."""
+
+    def test_ap_byline_on_non_wire_source(self):
+        from apps.articles.utils import is_wire_copy
+        assert is_wire_copy("Associated Press", "foxnews.com") is True
+
+    def test_ap_byline_on_ap_source(self):
+        from apps.articles.utils import is_wire_copy
+        assert is_wire_copy("Associated Press", "apnews.com") is False
+
+    def test_reuters_byline_on_non_wire_source(self):
+        from apps.articles.utils import is_wire_copy
+        assert is_wire_copy("Reuters", "cnn.com") is True
+
+    def test_reuters_byline_on_reuters_source(self):
+        from apps.articles.utils import is_wire_copy
+        assert is_wire_copy("Reuters", "reuters.com") is False
+
+    def test_afp_byline(self):
+        from apps.articles.utils import is_wire_copy
+        assert is_wire_copy("Agence France-Presse", "bbc.com") is True
+
+    def test_normal_author(self):
+        from apps.articles.utils import is_wire_copy
+        assert is_wire_copy("John Smith", "cnn.com") is False
+
+    def test_empty_author(self):
+        from apps.articles.utils import is_wire_copy
+        assert is_wire_copy("", "cnn.com") is False
+
+    def test_ap_in_mixed_byline(self):
+        from apps.articles.utils import is_wire_copy
+        assert is_wire_copy("John Smith, Associated Press", "nytimes.com") is True
+
+    def test_is_wire_content_field_default(self, source_npr):
+        """Test that is_wire_content defaults to False."""
+        article = Article.objects.create(
+            source=source_npr,
+            title='Regular Article',
+            url='https://npr.org/regular',
+        )
+        assert article.is_wire_content is False
+
+    def test_is_wire_content_field_set(self, source_fox):
+        """Test that is_wire_content can be set to True."""
+        article = Article.objects.create(
+            source=source_fox,
+            title='AP Wire on Fox',
+            url='https://foxnews.com/ap-wire',
+            author='Associated Press',
+            is_wire_content=True,
+        )
+        article.refresh_from_db()
+        assert article.is_wire_content is True
 
 
 class TestTopicModel:

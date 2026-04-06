@@ -22,8 +22,8 @@ class TopicAdmin(admin.ModelAdmin):
     search_fields = ['title', 'description', 'keywords']
     prepopulated_fields = {'slug': ('title',)}
     readonly_fields = [
-        'article_count', 'source_count', 'first_article_at',
-        'last_article_at', 'created_at', 'updated_at'
+        'article_count', 'source_count', 'event_registry_uri',
+        'first_article_at', 'last_article_at', 'created_at', 'updated_at'
     ]
     inlines = [ArticleClusterInline]
 
@@ -33,6 +33,10 @@ class TopicAdmin(admin.ModelAdmin):
         }),
         ('Metrics', {
             'fields': ('article_count', 'source_count', 'trending_score', 'is_trending')
+        }),
+        ('Event Registry', {
+            'fields': ('event_registry_uri',),
+            'classes': ('collapse',)
         }),
         ('Timestamps', {
             'fields': ('first_article_at', 'last_article_at', 'created_at', 'updated_at'),

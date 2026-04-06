@@ -15,31 +15,18 @@ class Source(TimestampedModel):
         RIGHT = 'right', 'Right'
         FAR_RIGHT = 'far_right', 'Far Right'
 
-    class DiscoveryMethod(models.TextChoices):
-        RSS = 'rss', 'RSS Feed'
-        SITEMAP = 'sitemap', 'Sitemap XML'
-        HOMEPAGE = 'homepage', 'Homepage Scraping'
-
     name = models.CharField(max_length=200)
     slug = models.SlugField(unique=True)
     website_url = models.URLField()
     logo_url = models.URLField(blank=True)
 
-    # Discovery configuration
-    discovery_method = models.CharField(
-        max_length=20,
-        choices=DiscoveryMethod.choices,
-        default=DiscoveryMethod.RSS
-    )
-    discovery_url = models.URLField(
-        help_text="RSS feed URL, sitemap URL, or homepage URL for scraping"
-    )
-
-    # Optional: CSS selectors for homepage scraping
-    article_link_selector = models.CharField(
+    # Event Registry identifier (e.g. "npr.org", "foxnews.com")
+    event_registry_uri = models.CharField(
         max_length=200,
+        unique=True,
         blank=True,
-        help_text="CSS selector for article links (homepage scraping only)"
+        default='',
+        help_text="Source URI in Event Registry (e.g. 'npr.org')"
     )
 
     # Source metadata
@@ -48,9 +35,7 @@ class Source(TimestampedModel):
         choices=BiasRating.choices,
         default=BiasRating.CENTER
     )
-    is_active = models.BooleanField(default=True)
-    scrape_frequency_hours = models.IntegerField(default=1)
-    last_scraped_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
         ordering = ['name']
@@ -60,7 +45,13 @@ class Source(TimestampedModel):
 
     def save(self, *args, **kwargs):
         if not self.slug:
-            self.slug = slugify(self.name)
+            base_slug = slugify(self.name)[:45] or 'source'
+            slug = base_slug
+            counter = 2
+            while Source.objects.filter(slug=slug).exists():
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+            self.slug = slug
         super().save(*args, **kwargs)
 
 
@@ -69,9 +60,6 @@ class Article(TimestampedModel):
 
     class ProcessingStatus(models.TextChoices):
         PENDING = 'pending', 'Pending'
-        SCRAPED = 'scraped', 'Content Scraped'
-        EMBEDDED = 'embedded', 'Embeddings Generated'
-        CLUSTERED = 'clustered', 'Topic Assigned'
         COMPLETE = 'complete', 'Processing Complete'
         FAILED = 'failed', 'Processing Failed'
 
@@ -86,7 +74,7 @@ class Article(TimestampedModel):
     slug = models.SlugField(max_length=250)
     url = models.URLField(unique=True, db_index=True, max_length=2000)
     author = models.CharField(max_length=300, blank=True)
-    published_at = models.DateTimeField(null=True, blank=True)
+    published_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     # Content
     summary = models.TextField(blank=True, help_text="Short summary/description")
@@ -100,10 +88,27 @@ class Article(TimestampedModel):
         default=ProcessingStatus.PENDING,
         db_index=True
     )
-    error_message = models.TextField(blank=True)
 
-    # Embeddings (stored as JSON)
-    embedding = models.JSONField(null=True, blank=True)
+    # Wire service detection
+    is_wire_content = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="True if this article is a republished wire service story (AP, Reuters, AFP, etc.)"
+    )
+
+    # Event Registry metadata
+    event_registry_uri = models.CharField(
+        max_length=200,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Article URI in Event Registry"
+    )
+    sentiment = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Sentiment score from Event Registry (-1 to 1)"
+    )
 
     class Meta:
         ordering = ['-published_at']

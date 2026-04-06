@@ -10,8 +10,17 @@ class Topic(TimestampedModel):
     slug = models.SlugField(max_length=200, unique=True)
     description = models.TextField(blank=True)
 
-    # Auto-generated keywords from clustering
+    # Keywords from Event Registry concepts
     keywords = models.JSONField(default=list)
+
+    # Event Registry identifier
+    event_registry_uri = models.CharField(
+        max_length=200,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Event URI in Event Registry"
+    )
 
     # Topic metrics
     article_count = models.IntegerField(default=0)
@@ -27,6 +36,10 @@ class Topic(TimestampedModel):
 
     class Meta:
         ordering = ['-trending_score', '-last_article_at']
+        indexes = [
+            models.Index(fields=['-trending_score', '-last_article_at']),
+            models.Index(fields=['event_registry_uri']),
+        ]
 
     def __str__(self):
         return self.title
@@ -38,21 +51,65 @@ class Topic(TimestampedModel):
 
     def update_metrics(self):
         """Update article and source counts."""
-        clusters = self.clusters.all()
-        self.article_count = clusters.count()
-        self.source_count = clusters.values('article__source').distinct().count()
-
-        # Update article timestamps
-        articles = clusters.values_list('article__published_at', flat=True)
-        dates = [d for d in articles if d is not None]
-        if dates:
-            self.first_article_at = min(dates)
-            self.last_article_at = max(dates)
+        from django.db.models import Count, Min, Max
+        metrics = self.clusters.aggregate(
+            _article_count=Count('id'),
+            _source_count=Count('article__source', distinct=True),
+            _first_article_at=Min('article__published_at'),
+            _last_article_at=Max('article__published_at'),
+        )
+        self.article_count = metrics['_article_count']
+        self.source_count = metrics['_source_count']
+        self.first_article_at = metrics['_first_article_at']
+        self.last_article_at = metrics['_last_article_at']
 
         self.save(update_fields=[
             'article_count', 'source_count',
             'first_article_at', 'last_article_at'
         ])
+
+    def get_covering_sources(self):
+        """Return Source queryset of sources that have articles for this topic."""
+        from apps.articles.models import Source
+        source_ids = self.clusters.values_list('article__source_id', flat=True).distinct()
+        return Source.objects.filter(pk__in=source_ids)
+
+    def get_missing_sources(self):
+        """Return active tracked sources that have NO articles for this topic."""
+        from apps.articles.models import Source
+        covering_ids = set(
+            self.clusters.values_list('article__source_id', flat=True).distinct()
+        )
+        return Source.objects.filter(is_active=True).exclude(pk__in=covering_ids)
+
+    def get_coverage_summary(self):
+        """Compute story-level omission: which tracked sources ignored this event."""
+        from apps.articles.models import Source
+        # Single query for covering source IDs (was duplicated before)
+        covering_ids = set(
+            self.clusters.values_list('article__source_id', flat=True).distinct()
+        )
+        covering_list = list(
+            Source.objects.filter(pk__in=covering_ids)
+            .values('name', 'slug', 'known_bias')
+            .order_by('name')
+        )
+
+        # "Notable" missing = sources with a known bias rating (editorially curated),
+        # not every auto-created source from Event Registry
+        notable_missing = list(
+            Source.objects.filter(is_active=True)
+            .exclude(pk__in=covering_ids)
+            .exclude(known_bias=Source.BiasRating.CENTER)
+            .values('name', 'slug', 'known_bias')
+            .order_by('name')
+        )
+
+        return {
+            'covering_sources': len(covering_list),
+            'covering_source_details': covering_list,
+            'notable_missing': notable_missing,
+        }
 
 
 class ArticleCluster(TimestampedModel):

@@ -15,11 +15,14 @@
                     name="q"
                     placeholder="Search topics or paste an article URL..."
                     class="search-input"
+                    aria-label="Search topics"
                     hx-get="{% url 'web:htmx-search' %}"
                     hx-trigger="keyup changed delay:300ms"
                     hx-target="#search-results"
+                    hx-indicator="#search-spinner"
                     autocomplete="off"
                 >
+                <span id="search-spinner" class="htmx-indicator"><span class="spinner"></span></span>
                 <div id="search-results" class="search-results"></div>
             </form>
         </div>
