@@ -32,6 +32,9 @@ httpx>=0.26
 # News API
 eventregistry>=9.1
 
+# Near-duplicate detection (MinHash / LSH for wire-copy republication)
+datasketch>=1.6
+
 # HuggingFace Datasets (for validation)
 datasets>=2.16
 huggingface-hub>=0.20
