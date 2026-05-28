@@ -30,6 +30,11 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # Static files - compressed with WhiteNoise in production
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 
+# Re-scan STATIC_ROOT on each request so runtime-downloaded topic images
+# are served without requiring a worker restart. Adds one stat() per static
+# request — negligible cost at our traffic.
+WHITENOISE_AUTOREFRESH = True
+
 # CORS - restrict in production
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])

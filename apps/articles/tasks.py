@@ -17,7 +17,13 @@ logger = logging.getLogger(__name__)
 
 
 def _download_topic_image(url: str, slug: str) -> str:
-    """Download an image URL and save locally. Returns the static path, or '' on failure."""
+    """Download an image URL and save locally. Returns the static path, or '' on failure.
+
+    Writes to STATIC_ROOT (staticfiles/) so the image is immediately visible
+    to Whitenoise without requiring a collectstatic run. Whitenoise must be
+    configured with WHITENOISE_AUTOREFRESH=True for new files to be picked
+    up between worker restarts.
+    """
     try:
         import httpx
         resp = httpx.get(url, timeout=10, follow_redirects=True)
@@ -31,7 +37,9 @@ def _download_topic_image(url: str, slug: str) -> str:
         elif 'webp' in ct:
             ext = 'webp'
 
-        img_dir = os.path.join(settings.BASE_DIR, 'static', 'images', 'topics')
+        # Write to STATIC_ROOT (served by Whitenoise) so the image is available
+        # immediately, not just after the next collectstatic + restart.
+        img_dir = os.path.join(settings.STATIC_ROOT, 'images', 'topics')
         os.makedirs(img_dir, exist_ok=True)
 
         filename = f'{slug[:50]}.{ext}'
