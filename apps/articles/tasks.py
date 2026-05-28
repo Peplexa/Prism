@@ -466,12 +466,36 @@ def flag_wire_duplicates(threshold=0.7):
                 for a in members
             )
 
+            # Pick the cluster anchor: prefer a non-wire member (its byline
+            # didn't match any wire pattern AND it wasn't already flagged),
+            # else fall back to the earliest-published member.
+            anchor = next(
+                (
+                    a for a in members
+                    if not a.is_wire_content
+                    and not is_wire_copy(a.author, '')
+                ),
+                members[0],
+            )
+
             if has_wire_byline:
-                # Wire copy detected — every member is a republication
-                to_flag = members
+                # Wire copy detected — every non-anchor member is a republication
+                to_flag = [a for a in members if a.id != anchor.id]
             else:
                 # No byline signal — keep earliest as "original", flag the rest
                 to_flag = members[1:]
+
+            # Persist cluster membership: every non-anchor member points to
+            # the anchor via wire_original; the anchor itself has it cleared.
+            if anchor.wire_original_id is not None:
+                anchor.wire_original = None
+                anchor.save(update_fields=['wire_original'])
+            for a in members:
+                if a.id == anchor.id:
+                    continue
+                if a.wire_original_id != anchor.id:
+                    a.wire_original = anchor
+                    a.save(update_fields=['wire_original'])
 
             for a in to_flag:
                 if not a.is_wire_content:

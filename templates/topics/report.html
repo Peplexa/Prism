@@ -136,40 +136,52 @@
     @media (max-width: 768px) {
         .report-hero { height: 160px; }
     }
-    /* Grouped source-article boxes */
-    .article-group {
+    /* Article cluster card: one original + its wire copies */
+    .article-cluster {
         border: 1px solid var(--color-border);
         border-radius: var(--radius);
         padding: 0.75rem 1rem;
-        margin-bottom: 0.75rem;
+        margin-bottom: 0.65rem;
         background: var(--color-bg);
     }
-    .article-group.wire {
+    .article-cluster.has-copies {
         border-color: rgba(245, 158, 11, 0.4);
-        background: rgba(245, 158, 11, 0.04);
+        background: rgba(245, 158, 11, 0.03);
     }
-    .article-group-header {
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: var(--color-text-muted);
-        margin-bottom: 0.65rem;
-        padding-bottom: 0.4rem;
-        border-bottom: 1px solid var(--color-border);
+    .cluster-anchor {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
+        gap: 0.75rem;
+        font-size: 0.85rem;
     }
-    .article-group.wire .article-group-header {
-        color: #c98410;
-        border-bottom-color: rgba(245, 158, 11, 0.25);
-    }
-    .article-group-rows {
+    .cluster-copies {
+        margin-top: 0.55rem;
+        padding-top: 0.5rem;
+        padding-left: 0.5rem;
+        border-top: 1px dashed rgba(245, 158, 11, 0.25);
         display: flex;
         flex-direction: column;
-        gap: 0.5rem;
+        gap: 0.35rem;
     }
+    .cluster-copies-label {
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #c98410;
+        margin-bottom: 0.15rem;
+    }
+    .cluster-copy-row {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        font-size: 0.78rem;
+        color: var(--color-text-muted);
+        padding-left: 0.85rem;
+        border-left: 2px solid rgba(245, 158, 11, 0.35);
+    }
+    .cluster-copy-row a { color: inherit; }
+    .cluster-copy-row a:hover { color: var(--color-text); }
     .report-badge {
         display: inline-block;
         background: var(--color-primary);
@@ -922,53 +934,39 @@
             In the meantime, you can read the original coverage below.
         </p>
 
-        {% if source_articles %}
-        {% if original_articles %}
-        <div class="article-group">
-            <div class="article-group-header">Original reporting ({{ original_articles|length }})</div>
-            <div class="article-group-rows">
-                {% for article in original_articles %}
-                <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
-                    <span class="article-source-badge bias-{{ article.analysis.dominant_leaning|default:'center' }}" style="flex-shrink: 0; font-size: 0.65rem; margin-top: 0.15rem;">
-                        {{ article.analysis.dominant_leaning|default:"center"|title }}
-                    </span>
-                    <div style="flex: 1; min-width: 0;">
-                        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600;">
-                            {{ article.title }}
-                        </a>
-                        <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-top: 0.25rem;">
-                            {{ article.source.name }}
-                            {% if article.published_at %} &middot; {{ article.published_at|date:"M d, Y" }}{% endif %}
-                        </div>
+        {% if article_clusters %}
+        {% for cluster in article_clusters %}
+        <div class="article-cluster {% if cluster.copies %}has-copies{% endif %}">
+            <div class="cluster-anchor">
+                <span class="article-source-badge bias-{{ cluster.anchor.analysis.dominant_leaning|default:'center' }}" style="flex-shrink: 0; font-size: 0.65rem;">
+                    {{ cluster.anchor.analysis.dominant_leaning|default:"center"|title }}
+                </span>
+                <div style="flex: 1; min-width: 0;">
+                    <a href="{{ cluster.anchor.url }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600;">
+                        {{ cluster.anchor.title }}
+                    </a>
+                    <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-top: 0.2rem;">
+                        {{ cluster.anchor.source.name }}
+                        {% if cluster.anchor.published_at %} &middot; {{ cluster.anchor.published_at|date:"M d, Y" }}{% endif %}
+                        {% if cluster.anchor.is_wire_content %} &middot; <span style="color: #c98410; font-weight: 600;">Wire</span>{% endif %}
                     </div>
+                </div>
+            </div>
+            {% if cluster.copies %}
+            <div class="cluster-copies">
+                <div class="cluster-copies-label">Republished by {{ cluster.copies|length }} other source{{ cluster.copies|length|pluralize }}</div>
+                {% for copy in cluster.copies %}
+                <div class="cluster-copy-row">
+                    <a href="{{ copy.url }}" target="_blank" rel="noopener noreferrer" style="flex: 1; min-width: 0;">
+                        <strong>{{ copy.source.name }}</strong>
+                        &mdash; {{ copy.title|truncatewords:14 }}
+                    </a>
                 </div>
                 {% endfor %}
             </div>
+            {% endif %}
         </div>
-        {% endif %}
-        {% if wire_articles %}
-        <div class="article-group wire">
-            <div class="article-group-header">Wire / republication ({{ wire_articles|length }})</div>
-            <div class="article-group-rows">
-                {% for article in wire_articles %}
-                <div style="display: flex; align-items: flex-start; gap: 0.75rem;">
-                    <span class="article-source-badge bias-{{ article.analysis.dominant_leaning|default:'center' }}" style="flex-shrink: 0; font-size: 0.65rem; margin-top: 0.15rem;">
-                        {{ article.analysis.dominant_leaning|default:"center"|title }}
-                    </span>
-                    <div style="flex: 1; min-width: 0;">
-                        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600;">
-                            {{ article.title }}
-                        </a>
-                        <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-top: 0.25rem;">
-                            {{ article.source.name }}
-                            {% if article.published_at %} &middot; {{ article.published_at|date:"M d, Y" }}{% endif %}
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-        {% endif %}
+        {% endfor %}
         {% else %}
         <p class="text-muted">No articles have been collected yet.</p>
         {% endif %}
@@ -991,45 +989,38 @@
         <p class="text-muted">Neutral summary is being generated...</p>
         {% endif %}
 
-        {% if source_articles %}
+        {% if article_clusters %}
         <div style="margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--color-border);">
             <h3 style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.75rem;">Source Articles</h3>
-            {% if original_articles %}
-            <div class="article-group">
-                <div class="article-group-header">Original reporting ({{ original_articles|length }})</div>
-                <div class="article-group-rows">
-                    {% for article in original_articles %}
-                    <div data-source-name="{{ article.source.name }}" class="source-article-row" style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem;">
-                        <span class="article-source-badge bias-{{ article.analysis.dominant_leaning|default:'center' }}" style="flex-shrink: 0; font-size: 0.65rem;">
-                            {{ article.analysis.dominant_leaning|default:"center"|title }}
-                        </span>
-                        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" style="flex: 1; min-width: 0;">
-                            <strong>{{ article.source.name }}</strong>
-                            <span class="text-muted">&mdash; {{ article.title|truncatewords:12 }}</span>
+            {% for cluster in article_clusters %}
+            <div class="article-cluster {% if cluster.copies %}has-copies{% endif %}">
+                <div data-source-name="{{ cluster.anchor.source.name }}" class="source-article-row cluster-anchor">
+                    <span class="article-source-badge bias-{{ cluster.anchor.analysis.dominant_leaning|default:'center' }}" style="flex-shrink: 0; font-size: 0.65rem;">
+                        {{ cluster.anchor.analysis.dominant_leaning|default:"center"|title }}
+                    </span>
+                    <a href="{{ cluster.anchor.url }}" target="_blank" rel="noopener noreferrer" style="flex: 1; min-width: 0;">
+                        <strong>{{ cluster.anchor.source.name }}</strong>
+                        <span class="text-muted">&mdash; {{ cluster.anchor.title|truncatewords:12 }}</span>
+                    </a>
+                    {% if cluster.anchor.is_wire_content %}
+                    <span style="flex-shrink: 0; font-size: 0.6rem; font-weight: 700; padding: 0.15rem 0.4rem; border-radius: 3px; background: #f59e0b; color: #000; text-transform: uppercase;">Wire</span>
+                    {% endif %}
+                </div>
+                {% if cluster.copies %}
+                <div class="cluster-copies">
+                    <div class="cluster-copies-label">Republished by {{ cluster.copies|length }} other source{{ cluster.copies|length|pluralize }}</div>
+                    {% for copy in cluster.copies %}
+                    <div data-source-name="{{ copy.source.name }}" class="source-article-row cluster-copy-row">
+                        <a href="{{ copy.url }}" target="_blank" rel="noopener noreferrer" style="flex: 1; min-width: 0;">
+                            <strong>{{ copy.source.name }}</strong>
+                            &mdash; {{ copy.title|truncatewords:12 }}
                         </a>
                     </div>
                     {% endfor %}
                 </div>
+                {% endif %}
             </div>
-            {% endif %}
-            {% if wire_articles %}
-            <div class="article-group wire">
-                <div class="article-group-header">Wire / republication ({{ wire_articles|length }})</div>
-                <div class="article-group-rows">
-                    {% for article in wire_articles %}
-                    <div data-source-name="{{ article.source.name }}" class="source-article-row" style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem;">
-                        <span class="article-source-badge bias-{{ article.analysis.dominant_leaning|default:'center' }}" style="flex-shrink: 0; font-size: 0.65rem;">
-                            {{ article.analysis.dominant_leaning|default:"center"|title }}
-                        </span>
-                        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" style="flex: 1; min-width: 0;">
-                            <strong>{{ article.source.name }}</strong>
-                            <span class="text-muted">&mdash; {{ article.title|truncatewords:12 }}</span>
-                        </a>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endif %}
+            {% endfor %}
         </div>
         {% endif %}
     </section>

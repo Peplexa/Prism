@@ -24,15 +24,25 @@ class HomeView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        trending = Topic.objects.filter(
-            is_trending=True
-        ).order_by('-trending_score')[:6]
+        # Same analyzed-first ordering as IdeasView — topics with a
+        # completed consensus pool surface ahead of ones still being
+        # processed, then by trending score.
+        analyzed_first = lambda qs: qs.annotate(
+            has_analysis=Case(
+                When(consensus_pool__status='complete', then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+        )
+        trending = list(analyzed_first(
+            Topic.objects.filter(is_trending=True)
+        ).order_by('-has_analysis', '-trending_score')[:6])
 
         if not trending:
             # Fallback: show topics with most coverage
-            trending = Topic.objects.filter(
-                article_count__gte=1
-            ).order_by('-article_count', '-trending_score')[:6]
+            trending = list(analyzed_first(
+                Topic.objects.filter(article_count__gte=1)
+            ).order_by('-has_analysis', '-article_count', '-trending_score')[:6])
 
         context['trending_topics'] = trending
         return context
@@ -202,16 +212,28 @@ class TopicReportView(DetailView):
         # Source articles (lightweight query for article links)
         context['source_articles'] = list(
             Article.objects.filter(cluster__topic=topic)
-            .select_related('source')
+            .select_related('source', 'wire_original__source')
             .order_by('source__name', '-published_at')
         )
-        # Split into original reporting vs wire-copy republication for grouped
-        # display in the Source Articles section.
-        context['original_articles'] = [
-            a for a in context['source_articles'] if not a.is_wire_content
-        ]
-        context['wire_articles'] = [
-            a for a in context['source_articles'] if a.is_wire_content
+        # Group by wire cluster: each anchor article gets its wire copies
+        # nested beneath it. Articles with no wire siblings appear as their
+        # own single-row entry.
+        anchors = []          # list[(anchor_article, [copy_article, ...])]
+        anchor_to_copies = {}
+        for a in context['source_articles']:
+            if a.wire_original_id is None:
+                anchor_to_copies.setdefault(a.id, [])
+                anchors.append(a)
+        for a in context['source_articles']:
+            if a.wire_original_id is None:
+                continue
+            anchor_to_copies.setdefault(a.wire_original_id, []).append(a)
+        context['article_clusters'] = [
+            {
+                'anchor': anchor,
+                'copies': anchor_to_copies.get(anchor.id, []),
+            }
+            for anchor in anchors
         ]
 
         # Publication timeline — deduplicate by source (keep earliest)

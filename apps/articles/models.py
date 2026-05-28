@@ -80,6 +80,20 @@ class Article(TimestampedModel):
         db_index=True,
         help_text="True if this article is a republished wire service story (AP, Reuters, AFP, etc.)"
     )
+    # Anchor article for a wire-copy cluster. Wire copies point to the
+    # cluster's "leader" (the non-wire article in the cluster if there is one,
+    # otherwise the earliest-published member). The leader itself has
+    # wire_original=None. Standalone articles (no near-duplicates in the
+    # topic) also have wire_original=None. Used by the report view to
+    # nest wire copies under their original.
+    wire_original = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='wire_copies',
+        help_text="If this article is a wire copy, points to the cluster anchor",
+    )
 
     # Image
     image_url = models.URLField(blank=True, default='', max_length=2000)
