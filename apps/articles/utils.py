@@ -66,6 +66,26 @@ def is_wire_copy(author: str, source_uri: str) -> bool:
     return bool(_WIRE_PATTERN.search(author))
 
 
+def wire_service_in_byline(author: str) -> str | None:
+    """Return the normalized wire-service name found in the byline, or None.
+
+    Used to cluster articles sharing the same upstream wire service across
+    a topic (e.g. multiple outlets republishing the same Reuters dispatch)
+    even when content similarity sits below the MinHash threshold because
+    each outlet did a different amount of light editing.
+    """
+    if not author:
+        return None
+    match = _WIRE_PATTERN.search(author)
+    if not match:
+        return None
+    # Normalize: lowercase + strip whitespace so 'AP' / 'Associated Press'
+    # collapse to a consistent group key. We don't try to unify aliases
+    # (AP and Associated Press are technically the same wire) — same exact
+    # match is enough for the common case.
+    return match.group(0).lower().strip()
+
+
 def _word_shingles(content: str, shingle_size: int) -> set[str]:
     """Tokenize and return the set of overlapping word-level k-shingles."""
     tokens = _TOKEN_RE.findall(content.lower())

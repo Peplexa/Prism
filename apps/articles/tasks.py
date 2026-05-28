@@ -378,6 +378,7 @@ def flag_wire_duplicates(threshold=0.7):
         MINHASH_SHINGLE_SIZE,
         article_minhash,
         is_wire_copy,
+        wire_service_in_byline,
     )
 
     newly_flagged = 0
@@ -444,6 +445,27 @@ def flag_wire_duplicates(threshold=0.7):
                 m_id = int(m)
                 if m_id != a.id and m_id in parent:
                     union(a.id, m_id)
+
+        # Additional edges: articles in this topic that share the same
+        # wire-service byline are likely the same upstream wire dispatch
+        # even when each outlet edited it enough to drop pairwise content
+        # similarity below threshold (Business Standard, Free Malaysia
+        # Today, U.S. News, Global Banking can all be the same Reuters
+        # story at Jaccard 0.5-0.66 with no MinHash edge).
+        byline_groups = {}
+        for a in articles:
+            if a.id not in parent:
+                continue
+            svc = wire_service_in_byline(a.author or '')
+            if svc:
+                byline_groups.setdefault(svc, []).append(a.id)
+        for svc, ids in byline_groups.items():
+            if len(ids) < 2:
+                continue
+            # Union them all into one component
+            head = ids[0]
+            for other in ids[1:]:
+                union(head, other)
 
         # Group into components
         components = {}
