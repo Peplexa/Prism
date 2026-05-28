@@ -125,10 +125,19 @@ class NeutralSummarizer:
                     )},
                 ],
                 temperature=0.3,
-                max_tokens=1024,
+                # No max_tokens cap — large pools (200+ nuggets) need room
+                # for both reasoning and final output. Empty content on
+                # deepseek-reasoner is a known failure mode when the cap
+                # is set too low.
             )
 
-            summary.summary_text = response.strip()
+            text = (response or "").strip()
+            if not text:
+                # Don't claim success on an empty response. Raise so the
+                # except below marks status=FAILED with a real error.
+                raise ValueError("LLM returned empty summary text")
+
+            summary.summary_text = text
             summary.nuggets_used = len(nuggets)
             summary.model_name = getattr(
                 settings, 'DEEPSEEK_MODEL', 'deepseek-reasoner'

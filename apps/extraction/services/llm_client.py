@@ -202,9 +202,13 @@ class DeepSeekClient(BaseLLMClient):
         prompt: str,
         system: str | None = None,
         temperature: float = 0.1,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
     ) -> str:
-        """Generate completion using DeepSeek API (OpenAI-compatible)."""
+        """Generate completion using DeepSeek API (OpenAI-compatible).
+
+        If max_tokens is None, the parameter is omitted from the request so
+        the API uses the model's maximum (8K for deepseek-chat/reasoner).
+        """
         messages = []
 
         if system:
@@ -218,7 +222,7 @@ class DeepSeekClient(BaseLLMClient):
         self,
         messages: list[dict[str, str]],
         temperature: float = 0.1,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
     ) -> str:
         """Chat completion using DeepSeek API."""
         return self._call_api(messages, temperature, max_tokens)
@@ -227,7 +231,7 @@ class DeepSeekClient(BaseLLMClient):
         self,
         messages: list[dict[str, str]],
         temperature: float,
-        max_tokens: int,
+        max_tokens: int | None,
     ) -> str:
         """Make API call to DeepSeek."""
         headers = {
@@ -239,9 +243,10 @@ class DeepSeekClient(BaseLLMClient):
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
             "stream": False,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         try:
             response = self._client.post(
