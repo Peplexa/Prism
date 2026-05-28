@@ -958,9 +958,6 @@
         <h2>Source Coverage</h2>
         <p class="section-desc">
             {{ coverage_summary.covering_sources }} source{{ coverage_summary.covering_sources|pluralize }} covered this event.
-            {% if coverage_summary.notable_missing %}
-            {{ coverage_summary.notable_missing|length }} major source{{ coverage_summary.notable_missing|length|pluralize }} did not publish any article.
-            {% endif %}
         </p>
 
         <h4 style="margin-top: 1rem; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--color-muted);">Sources that covered this story</h4>
@@ -971,17 +968,6 @@
             </span>
             {% endfor %}
         </div>
-
-        {% if coverage_summary.notable_missing %}
-        <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--color-muted);">Notable sources that did not cover this story</h4>
-        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-            {% for source in coverage_summary.notable_missing %}
-            <span style="background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 4px; padding: 0.25rem 0.75rem; font-size: 0.8rem; opacity: 0.7;">
-                {{ source.name }}
-            </span>
-            {% endfor %}
-        </div>
-        {% endif %}
     </section>
     {% endif %}
 

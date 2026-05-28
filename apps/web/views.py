@@ -3,7 +3,7 @@ import json
 from django.contrib.auth import login
 from django.contrib.auth.forms import UserCreationForm
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect
 from django.utils.decorators import method_decorator
@@ -47,9 +47,18 @@ class IdeasView(ListView):
     paginate_by = 20
 
     def get_queryset(self):
+        # Show analyzed topics first (those with a completed consensus pool),
+        # then unanalyzed ones. Within each group, fall back to the usual
+        # trending order.
         return Topic.objects.filter(
             article_count__gte=2
-        ).order_by('-trending_score', '-last_article_at')
+        ).annotate(
+            has_analysis=Case(
+                When(consensus_pool__status='complete', then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+        ).order_by('-has_analysis', '-trending_score', '-last_article_at')
 
 
 class ArticleDetailView(DetailView):
