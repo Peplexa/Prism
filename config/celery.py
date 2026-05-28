@@ -16,10 +16,10 @@ app.autodiscover_tasks()
 
 # Celery Beat schedule
 app.conf.beat_schedule = {
-    # Poll Event Registry for new events every 2 minutes
+    # Poll Event Registry for new events every 5 minutes
     'fetch-events': {
         'task': 'apps.articles.tasks.fetch_events',
-        'schedule': crontab(minute='*/2'),
+        'schedule': crontab(minute='*/5'),
     },
 
     # Update trending scores every 15 minutes
