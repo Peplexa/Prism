@@ -4,8 +4,8 @@ from .models import Source, Article
 
 @admin.register(Source)
 class SourceAdmin(admin.ModelAdmin):
-    list_display = ['name', 'known_bias', 'event_registry_uri', 'is_active']
-    list_filter = ['known_bias', 'is_active']
+    list_display = ['name', 'event_registry_uri', 'is_active']
+    list_filter = ['is_active']
     search_fields = ['name', 'website_url', 'event_registry_uri']
     prepopulated_fields = {'slug': ('name',)}
     readonly_fields = ['created_at', 'updated_at']
@@ -18,7 +18,7 @@ class SourceAdmin(admin.ModelAdmin):
             'fields': ('event_registry_uri',)
         }),
         ('Metadata', {
-            'fields': ('known_bias', 'is_active')
+            'fields': ('is_active',)
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),

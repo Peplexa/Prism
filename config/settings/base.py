@@ -156,8 +156,8 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
-CELERY_TASK_TIME_LIMIT = 600          # Hard kill after 10 minutes
-CELERY_TASK_SOFT_TIME_LIMIT = 480     # Graceful shutdown after 8 minutes
+CELERY_TASK_TIME_LIMIT = 1800         # Hard kill after 30 minutes
+CELERY_TASK_SOFT_TIME_LIMIT = 1500    # Graceful shutdown after 25 minutes
 CELERY_RESULT_EXPIRES = 86400         # Clean up task results after 24 hours
 
 # Event Registry Configuration
@@ -176,7 +176,7 @@ OLLAMA_TIMEOUT = env.int('OLLAMA_TIMEOUT', default=120)
 
 # DeepSeek API (cloud)
 DEEPSEEK_API_KEY = env('DEEPSEEK_API_KEY', default='')
-DEEPSEEK_MODEL = env('DEEPSEEK_MODEL', default='deepseek-chat')
+DEEPSEEK_MODEL = env('DEEPSEEK_MODEL', default='deepseek-reasoner')
 DEEPSEEK_BASE_URL = env('DEEPSEEK_BASE_URL', default='https://api.deepseek.com')
 
 # Semantic Evaluation Configuration
@@ -201,6 +201,11 @@ CONSENSUS_POST_PROCESSING_ENABLED = env.bool('CONSENSUS_POST_PROCESSING_ENABLED'
 CONSENSUS_MERGE_BATCH_SIZE = env.int('CONSENSUS_MERGE_BATCH_SIZE', default=30)
 CONSENSUS_TIER1_TARGET = env.int('CONSENSUS_TIER1_TARGET', default=5)
 CONSENSUS_TIER2_TARGET = env.int('CONSENSUS_TIER2_TARGET', default=15)
+
+# Authentication
+LOGIN_URL = 'web:login'
+LOGIN_REDIRECT_URL = 'web:home'
+LOGOUT_REDIRECT_URL = 'web:home'
 
 # Dataset Paths
 ROTOWIRE_DATA_PATH = BASE_DIR / 'data' / 'rotowire'

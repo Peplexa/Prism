@@ -14,19 +14,18 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0']
 
-# Database - SQLite for dev, PostgreSQL for production (via DATABASE_URL)
+# Database - PostgreSQL (same as production)
 import os
-if os.environ.get('DATABASE_URL'):
-    DATABASES = {
-        'default': env.db('DATABASE_URL')
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('DB_NAME', 'prism'),
+        'USER': os.environ.get('DB_USER', 'prism'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'prism_dev_password'),
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '5433'),
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
+}
 
 # Cache - dummy cache in dev/test (Redis used in production)
 CACHES = {

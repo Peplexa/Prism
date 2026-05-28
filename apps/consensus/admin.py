@@ -5,6 +5,7 @@ from django.contrib import admin
 from .models import (
     ConsensusPool,
     ConsensusNugget,
+    Contradiction,
     RawNugget,
     OmissionScore,
     NuggetJudgment,
@@ -51,7 +52,7 @@ class ConsensusPoolAdmin(admin.ModelAdmin):
         'built_at', 'error_message',
         'created_at', 'updated_at',
     ]
-    inlines = [ConsensusNuggetInline, OmissionScoreInline]
+    inlines = [ConsensusNuggetInline, OmissionScoreInline]  # ContradictionInline added below
 
     actions = ['rebuild_pool']
 
@@ -130,3 +131,25 @@ class OmissionScoreAdmin(admin.ModelAdmin):
         if obj.vital_omission_rate is not None:
             return f"{obj.vital_omission_rate:.0%}"
         return '-'
+
+
+@admin.register(Contradiction)
+class ContradictionAdmin(admin.ModelAdmin):
+    list_display = ['pool_topic', 'nugget_a_short', 'nugget_b_short', 'created_at']
+    list_filter = ['pool']
+    readonly_fields = [
+        'pool', 'nugget_a', 'nugget_b', 'explanation',
+        'created_at', 'updated_at',
+    ]
+
+    @admin.display(description='Topic')
+    def pool_topic(self, obj):
+        return obj.pool.topic.title[:40]
+
+    @admin.display(description='Claim A')
+    def nugget_a_short(self, obj):
+        return obj.nugget_a.nugget_text[:50]
+
+    @admin.display(description='Claim B')
+    def nugget_b_short(self, obj):
+        return obj.nugget_b.nugget_text[:50]

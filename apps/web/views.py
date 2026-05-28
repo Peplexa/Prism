@@ -1,14 +1,20 @@
 import json
 
+from django.contrib.auth import login
+from django.contrib.auth.forms import UserCreationForm
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q
+from django.http import HttpResponse, JsonResponse
+from django.shortcuts import redirect
 from django.utils.decorators import method_decorator
+from django.views import View
 from django.views.decorators.cache import cache_page
 from django.views.generic import TemplateView, DetailView, ListView
-from django.http import HttpResponse
+
 from apps.analysis.models import ArticleAnalysis
+from apps.articles.models import Article, Source
 from apps.topics.models import Topic
-from apps.articles.models import Article
+from apps.web.models import UserPreference
 
 
 @method_decorator(cache_page(60 * 2), name='dispatch')
@@ -304,6 +310,7 @@ class TopicReportView(DetailView):
         if has_tiers:
             context['tier1_nuggets'] = [n for n in display_nuggets if n.get('tier') == 1]
             context['tier2_nuggets'] = [n for n in display_nuggets if n.get('tier') == 2]
+            context['tier3_nuggets'] = [n for n in display_nuggets if n.get('tier') == 3]
 
         # Group matrix rows by theme for display
         from collections import OrderedDict
@@ -320,5 +327,60 @@ class TopicReportView(DetailView):
         context['omission_json'] = json.dumps(omission_data)
         context['tone_json'] = json.dumps(tone_data)
         context['framing_json'] = json.dumps(framing_data)
+        # Contradictions
+        contradictions = cache.get('contradictions', [])
+        context['contradictions'] = contradictions
+        context['contradictions_json'] = json.dumps(contradictions)
 
         return context
+
+
+class RegisterView(View):
+    """Simple registration with username + password."""
+    template_name = 'registration/register.html'
+
+    def get(self, request):
+        if request.user.is_authenticated:
+            return redirect('web:home')
+        form = UserCreationForm()
+        return self._render(request, form)
+
+    def post(self, request):
+        form = UserCreationForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user)
+            return redirect('web:home')
+        return self._render(request, form)
+
+    def _render(self, request, form):
+        from django.template.response import TemplateResponse
+        return TemplateResponse(request, self.template_name, {'form': form})
+
+
+def preferred_source_view(request):
+    """Save/load preferred source for authenticated users."""
+    if not request.user.is_authenticated:
+        return JsonResponse({'error': 'Login required'}, status=401)
+
+    pref, _ = UserPreference.objects.get_or_create(user=request.user)
+
+    if request.method == 'POST':
+        source_name = request.POST.get('source_name', '').strip()
+        if source_name:
+            try:
+                source = Source.objects.get(name=source_name)
+                pref.preferred_source = source
+                pref.save()
+                return JsonResponse({'source_name': source.name})
+            except Source.DoesNotExist:
+                return JsonResponse({'error': 'Source not found'}, status=404)
+        else:
+            pref.preferred_source = None
+            pref.save()
+            return JsonResponse({'source_name': None})
+
+    # GET
+    return JsonResponse({
+        'source_name': pref.preferred_source.name if pref.preferred_source else None,
+    })

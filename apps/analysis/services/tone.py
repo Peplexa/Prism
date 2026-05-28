@@ -21,15 +21,19 @@ MODEL_NAME = 'GroNLP/mdebertav3-subjectivity-english'
 # Module-level cache so the model is loaded once per process
 _model = None
 _tokenizer = None
+_lock = __import__('threading').Lock()
 
 
 def _get_model_and_tokenizer():
     global _model, _tokenizer
-    if _model is None:
-        logger.info("Loading tone model: %s", MODEL_NAME)
-        _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        _model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
-        _model.eval()
+    if _model is not None:
+        return _model, _tokenizer
+    with _lock:
+        if _model is None:
+            logger.info("Loading tone model: %s", MODEL_NAME)
+            _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+            _model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+            _model.eval()
     return _model, _tokenizer
 
 

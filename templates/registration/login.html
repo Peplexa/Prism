@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Log In - Prism{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <h1>Log In</h1>
+    <form method="post" class="auth-form">
+        {% csrf_token %}
+        {% if form.errors %}
+        <div class="errorlist" style="margin-bottom: 1rem;">
+            Invalid username or password. Please try again.
+        </div>
+        {% endif %}
+        <div class="form-group">
+            <label for="id_username">Username</label>
+            <input type="text" name="username" id="id_username" autofocus required>
+        </div>
+        <div class="form-group">
+            <label for="id_password">Password</label>
+            <input type="password" name="password" id="id_password" required>
+        </div>
+        <button type="submit" class="btn-submit">Log In</button>
+        <div class="form-footer">
+            Don't have an account? <a href="{% url 'web:register' %}">Register</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

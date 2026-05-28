@@ -16,7 +16,7 @@ def source_npr(db):
         slug='npr',
         website_url='https://www.npr.org',
         event_registry_uri='npr.org',
-        known_bias=Source.BiasRating.LEFT,
+
         is_active=True,
     )
 
@@ -29,7 +29,7 @@ def source_fox(db):
         slug='fox-news',
         website_url='https://www.foxnews.com',
         event_registry_uri='foxnews.com',
-        known_bias=Source.BiasRating.RIGHT,
+
         is_active=True,
     )
 
@@ -42,7 +42,7 @@ def source_reuters(db):
         slug='reuters',
         website_url='https://www.reuters.com',
         event_registry_uri='reuters.com',
-        known_bias=Source.BiasRating.CENTER,
+
         is_active=True,
     )
 

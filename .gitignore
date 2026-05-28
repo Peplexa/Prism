@@ -46,6 +46,9 @@ ENV/
 # Static files (collected)
 staticfiles/
 
+# Topic images downloaded by article fetcher at runtime
+static/images/topics/
+
 # Celery
 celerybeat-schedule
 celerybeat.pid

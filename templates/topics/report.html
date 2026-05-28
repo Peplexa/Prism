@@ -357,21 +357,36 @@
         display: flex;
         gap: 1.25rem;
         margin-bottom: 1rem;
+        padding: 0.6rem 0.9rem;
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius);
         font-size: 0.75rem;
         color: var(--color-text-muted);
+        flex-wrap: wrap;
+        align-items: center;
     }
     .legend-cell {
-        display: inline-block;
-        width: 14px;
-        height: 14px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
         border-radius: 3px;
         vertical-align: middle;
-        margin-right: 0.3rem;
+        margin-right: 0.35rem;
+        font-size: 0.8rem;
+        font-weight: 700;
+        line-height: 1;
+        color: #fff;
     }
     .legend-cell.cell-support { background: #22c55e; }
+    .legend-cell.cell-support::before { content: "\2713"; }
     .legend-cell.cell-partial_support { background: #eab308; }
+    .legend-cell.cell-partial_support::before { content: "\2212"; }
     .legend-cell.cell-not_support { background: #ef4444; }
-    .legend-cell.cell-no_data { background: var(--color-border); }
+    .legend-cell.cell-not_support::before { content: "\2715"; }
+    .legend-cell.cell-no_data { background: var(--color-border); color: var(--color-text-muted); }
 
     .matrix-container {
         overflow: auto;
@@ -404,18 +419,32 @@
         min-width: 250px;
         width: 50%;
         text-align: left;
+        vertical-align: bottom;
     }
     .matrix-source-header {
-        text-align: center;
-        min-width: 70px;
+        position: relative;
+        height: 150px;
+        min-width: 44px;
+        width: 44px;
+        padding: 0 0 0.4rem 0;
+        vertical-align: bottom;
+        text-align: left;
+        overflow: visible;
     }
     .matrix-source-name {
-        writing-mode: vertical-lr;
-        transform: rotate(180deg);
+        position: absolute;
+        bottom: 0.4rem;
+        left: 50%;
         display: inline-block;
-        max-height: 100px;
+        transform-origin: left bottom;
+        transform: rotate(-65deg);
+        white-space: nowrap;
+        max-width: 160px;
         overflow: hidden;
         text-overflow: ellipsis;
+        text-transform: none;
+        font-size: 0.72rem;
+        letter-spacing: 0;
     }
     .matrix-fact-cell {
         position: sticky;
@@ -441,13 +470,19 @@
         padding: 0;
         border-bottom: 1px solid var(--color-border);
         text-align: center;
-        width: 70px;
-        min-width: 70px;
+        width: 44px;
+        min-width: 44px;
         height: 36px;
+        font-size: 0.95rem;
+        font-weight: 700;
+        line-height: 1;
     }
-    .matrix-cell.cell-support { background: rgba(34, 197, 94, 0.25); }
-    .matrix-cell.cell-partial_support { background: rgba(234, 179, 8, 0.25); }
-    .matrix-cell.cell-not_support { background: rgba(239, 68, 68, 0.25); }
+    .matrix-cell.cell-support { background: rgba(34, 197, 94, 0.25); color: #15803d; }
+    .matrix-cell.cell-support::before { content: "\2713"; }
+    .matrix-cell.cell-partial_support { background: rgba(234, 179, 8, 0.25); color: #a16207; }
+    .matrix-cell.cell-partial_support::before { content: "\2212"; }
+    .matrix-cell.cell-not_support { background: rgba(239, 68, 68, 0.25); color: #b91c1c; }
+    .matrix-cell.cell-not_support::before { content: "\2715"; }
     .matrix-cell.cell-no_data { background: var(--color-bg); }
     .matrix-cell:hover {
         outline: 2px solid var(--color-primary);
@@ -706,12 +741,69 @@
         padding: 0.25rem 0.25rem 0 calc(160px + 0.75rem + 0.25rem);
     }
 
+    /* Conflicting Claims */
+    .contradiction-card {
+        background: var(--color-bg);
+        border: 1px solid var(--color-border);
+        border-left: 4px solid #f59e0b;
+        border-radius: var(--radius);
+        padding: 1rem 1.25rem;
+        margin-bottom: 1rem;
+    }
+    .contradiction-vs {
+        display: flex;
+        gap: 1rem;
+        align-items: stretch;
+        margin-bottom: 0.75rem;
+    }
+    .contradiction-side {
+        flex: 1;
+        padding: 0.75rem;
+        border-radius: 6px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+    }
+    .contradiction-side-label {
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.4rem;
+    }
+    .contradiction-side-a .contradiction-side-label { color: #22c55e; }
+    .contradiction-side-b .contradiction-side-label { color: #ef4444; }
+    .contradiction-claim { font-size: 0.9rem; font-weight: 600; margin-bottom: 0.4rem; }
+    .contradiction-sources { font-size: 0.75rem; color: var(--color-text-muted); }
+    .contradiction-divider {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 40px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: #f59e0b;
+    }
+    .contradiction-explanation { font-size: 0.8rem; color: var(--color-text-muted); font-style: italic; }
+    .nonconsensus-badge {
+        display: inline-block;
+        background: #f59e0b;
+        color: #000;
+        font-size: 0.55rem;
+        font-weight: 800;
+        width: 14px; height: 14px; line-height: 14px;
+        text-align: center;
+        border-radius: 50%;
+        vertical-align: middle;
+        margin-left: 0.25rem;
+    }
+
     @media (max-width: 768px) {
         .report-header { padding: 1.5rem 0 1rem; }
         .report-section { padding: 1rem; }
         .topic-stats { flex-wrap: wrap; }
-        .matrix-source-header { min-width: 50px; }
-        .matrix-cell { width: 50px; min-width: 50px; }
+        .matrix-source-header { min-width: 38px; width: 38px; height: 130px; }
+        .matrix-source-name { font-size: 0.68rem; max-width: 140px; }
+        .matrix-cell { width: 38px; min-width: 38px; font-size: 0.85rem; }
         .matrix-fact-cell { min-width: 180px; max-width: 250px; }
         .matrix-fact-header { min-width: 180px; max-width: 250px; }
         .summary-table th, .summary-table td { padding: 0.5rem 0.5rem; }
@@ -720,6 +812,8 @@
         .tl-search-input { flex: 1 1 150px; }
         .tl-row-name { flex: 0 0 100px; font-size: 0.65rem; }
         .timeline-range-label { padding-left: calc(100px + 0.75rem + 0.25rem); }
+        .pref-stats { gap: 1rem; }
+        .pref-stat-value { font-size: 1rem; }
     }
 </style>
 {% endblock %}
@@ -745,8 +839,8 @@
                 <div class="stat-label">Claims Identified</div>
             </div>
             <div class="stat-item">
-                <div class="stat-value">{{ pool.vital_nugget_count }}</div>
-                <div class="stat-label">Vital Claims</div>
+                <div class="stat-value">{{ pool.nugget_count }}</div>
+                <div class="stat-label">Claims Analyzed</div>
             </div>
             {% endif %}
         </div>
@@ -755,11 +849,13 @@
                 &larr; Back to home
             </a>
         </div>
+
     </header>
 
     <div style="background: var(--color-bg-alt, #1a1a2e); border: 1px solid var(--color-border); border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1.5rem; font-size: 0.8rem; color: var(--color-text-muted);">
         <strong style="color: var(--color-text);">Note:</strong> Consensus reflects what most sources reported, not objective truth. Claims widely repeated across outlets may still be inaccurate. Prism measures <em>relative coverage</em>, not correctness.
     </div>
+
 
     {% if not pool or pool.status != 'complete' %}
     <!-- Analysis pending — show source articles as fallback -->
@@ -774,8 +870,8 @@
         <div style="display: flex; flex-direction: column; gap: 0.75rem;">
             {% for article in source_articles %}
             <div style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.75rem; background: var(--color-bg); border-radius: var(--radius);">
-                <span class="article-source-badge bias-{{ article.source.known_bias }}" style="flex-shrink: 0; font-size: 0.65rem; margin-top: 0.15rem;">
-                    {{ article.source.get_known_bias_display }}
+                <span class="article-source-badge bias-{{ article.analysis.dominant_leaning|default:'center' }}" style="flex-shrink: 0; font-size: 0.65rem; margin-top: 0.15rem;">
+                    {{ article.analysis.dominant_leaning|default:"center"|title }}
                 </span>
                 <div style="flex: 1; min-width: 0;">
                     <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600;">
@@ -816,9 +912,9 @@
             <h3 style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 0.75rem;">Source Articles</h3>
             <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                 {% for article in source_articles %}
-                <div style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem;">
-                    <span class="article-source-badge bias-{{ article.source.known_bias }}" style="flex-shrink: 0; font-size: 0.65rem;">
-                        {{ article.source.get_known_bias_display }}
+                <div data-source-name="{{ article.source.name }}" class="source-article-row" style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem;">
+                    <span class="article-source-badge bias-{{ article.analysis.dominant_leaning|default:'center' }}" style="flex-shrink: 0; font-size: 0.65rem;">
+                        {{ article.analysis.dominant_leaning|default:"center"|title }}
                     </span>
                     <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" style="flex: 1; min-width: 0;">
                         <strong>{{ article.source.name }}</strong>
@@ -848,7 +944,7 @@
         <h4 style="margin-top: 1rem; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--color-muted);">Sources that covered this story</h4>
         <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
             {% for source in coverage_summary.covering_source_details %}
-            <span style="background: var(--color-accent-muted, #1a3a2a); border: 1px solid var(--color-accent, #2d8a56); border-radius: 4px; padding: 0.25rem 0.75rem; font-size: 0.8rem;">
+            <span data-source-name="{{ source.name }}" class="source-chip" style="background: var(--color-accent-muted, #1a3a2a); border: 1px solid var(--color-accent, #2d8a56); border-radius: 4px; padding: 0.25rem 0.75rem; font-size: 0.8rem;">
                 {{ source.name }}
             </span>
             {% endfor %}
@@ -905,6 +1001,46 @@
     </section>
     {% endif %}
 
+    <!-- Conflicting Claims -->
+    <section class="report-section">
+        <div class="section-header">
+            <h2>Conflicting Claims ({{ contradictions|length }})</h2>
+            <button class="help-toggle" onclick="toggleHelp('contradiction-help')" title="What are conflicting claims?">?</button>
+        </div>
+        <div class="help-panel" id="contradiction-help">
+            <p>When multiple sources report the same topic but with <strong>mutually exclusive details</strong>
+            (different numbers, opposite outcomes), Prism flags these as conflicting claims.</p>
+            <p>Each card shows the two versions, which sources support each side,
+            and an explanation of the disagreement. This does not determine which version is correct
+            &mdash; it highlights where sources diverge.</p>
+        </div>
+
+        {% if not contradictions %}
+        <p class="text-muted" style="text-align: center; padding: 1rem;">No contradictions found. The system has determined that sources are in agreement on the claims reported across this event.</p>
+        {% endif %}
+
+        {% for c in contradictions %}
+        <div class="contradiction-card">
+            <div class="contradiction-vs">
+                {% for claim in c.claims %}
+                {% if not forloop.first %}<div class="contradiction-divider">VS</div>{% endif %}
+                <div class="contradiction-side {% if forloop.counter0 == c.consensus_index %}contradiction-side-a{% elif c.consensus_index >= 0 %}contradiction-side-b{% else %}contradiction-side-a{% endif %}">
+                    <div class="contradiction-side-label">
+                        {% if forloop.counter0 == c.consensus_index %}Consensus{% elif c.consensus_index >= 0 %}Non-Consensus <span class="nonconsensus-badge">!</span>{% else %}Claim {{ forloop.counter }}{% endif %}
+                        ({{ claim.supporters|length }} source{{ claim.supporters|length|pluralize }})
+                    </div>
+                    <div class="contradiction-claim">{{ claim.text }}</div>
+                    <div class="contradiction-sources">
+                        {% for src in claim.supporters %}{{ src }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="contradiction-explanation">{{ c.explanation }}</div>
+        </div>
+        {% endfor %}
+    </section>
+
     <!-- Section 3: Source Analysis Overview (Compact Table) -->
     <section class="report-section">
         <div class="section-header">
@@ -932,7 +1068,7 @@
                 </thead>
                 <tbody>
                     {% for src in source_summary %}
-                    <tr>
+                    <tr data-source-name="{{ src.source_name }}">
                         <td data-value="{{ src.source_name }}">
                             <span class="bar-source-badge" style="background: var(--color-{{ src.bias }})"></span>
                             {{ src.source_name }}
@@ -961,10 +1097,13 @@
                         </td>
                         <td>
                             {% if src.left_pct != None %}
-                            <div class="mini-framing-bar">
-                                <span class="framing-left" style="width: {{ src.left_pct }}%"></span>
-                                <span class="framing-center" style="width: {{ src.center_pct }}%"></span>
-                                <span class="framing-right" style="width: {{ src.right_pct }}%"></span>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <div class="mini-framing-bar">
+                                    <span class="framing-left" style="width: {{ src.left_pct }}%"></span>
+                                    <span class="framing-center" style="width: {{ src.center_pct }}%"></span>
+                                    <span class="framing-right" style="width: {{ src.right_pct }}%"></span>
+                                </div>
+                                <span style="font-size: 0.7rem; color: var(--color-text-muted); white-space: nowrap;">{{ src.left_pct }}/{{ src.center_pct }}/{{ src.right_pct }}</span>
                             </div>
                             {% else %}<span class="text-muted">--</span>{% endif %}
                         </td>
@@ -1072,7 +1211,7 @@
     <!-- Section: Claims Coverage Matrix -->
     <section class="report-section">
         <div class="section-header">
-            <h2>Claims Coverage Matrix ({{ vital_nuggets|length }} Vital / {{ all_nuggets|length }} Total)</h2>
+            <h2>Claims Coverage Matrix ({{ tier1_nuggets|length }} Headline / {{ all_nuggets|length }} Total)</h2>
             <button class="help-toggle" onclick="toggleHelp('matrix-help')" title="How to read this matrix">?</button>
         </div>
         <div class="help-panel" id="matrix-help">
@@ -1090,12 +1229,11 @@
         <!-- Filter controls -->
         <div class="matrix-filters" id="matrix-filters">
             <button class="filter-btn active" data-filter="all">{% if matrix_truncated %}All Shown ({{ matrix_rows|length }}){% else %}All Claims ({{ matrix_rows|length }}){% endif %}</button>
-            <button class="filter-btn" data-filter="vital">Vital Only ({{ vital_nuggets|length }})</button>
             {% if has_tiers %}
             <button class="filter-btn" data-filter="tier1">Headline ({{ tier1_nuggets|length }})</button>
             <button class="filter-btn" data-filter="tier2">Context ({{ tier2_nuggets|length }})</button>
+            <button class="filter-btn" data-filter="tier3">Detail ({{ tier3_nuggets|length }})</button>
             {% endif %}
-            <button class="filter-btn" data-filter="omitted">Most Omitted</button>
         </div>
 
         <!-- Legend -->
@@ -1126,7 +1264,7 @@
                                 <tr>
                                     <th class="matrix-fact-header">Claim</th>
                                     {% for src in matrix_sources %}
-                                    <th class="matrix-source-header">
+                                    <th class="matrix-source-header" data-source-name="{{ src }}">
                                         <span class="matrix-source-name">{{ src }}</span>
                                     </th>
                                     {% endfor %}
@@ -1142,14 +1280,11 @@
                                                 T{{ row.tier }}
                                             </span>
                                             {% endif %}
-                                            <span class="nugget-badge {% if row.importance == 'vital' %}nugget-vital{% else %}nugget-okay{% endif %}">
-                                                {{ row.importance }}
-                                            </span>
                                             <span class="matrix-fact-text">{{ row.nugget_text }}</span>
                                         </div>
                                     </td>
                                     {% for src in matrix_sources %}
-                                    <td class="matrix-cell cell-{{ row.cells|get_item:src }}"
+                                    <td class="matrix-cell cell-{{ row.cells|get_item:src }}" data-source-name="{{ src }}"
                                         title="{{ src }}: {{ row.cells|get_item:src|judgment_label }}">
                                     </td>
                                     {% endfor %}
@@ -1170,7 +1305,7 @@
                     <tr>
                         <th class="matrix-fact-header">Claim</th>
                         {% for src in matrix_sources %}
-                        <th class="matrix-source-header">
+                        <th class="matrix-source-header" data-source-name="{{ src }}">
                             <span class="matrix-source-name">{{ src }}</span>
                         </th>
                         {% endfor %}
@@ -1186,14 +1321,11 @@
                                     T{{ row.tier }}
                                 </span>
                                 {% endif %}
-                                <span class="nugget-badge {% if row.importance == 'vital' %}nugget-vital{% else %}nugget-okay{% endif %}">
-                                    {{ row.importance }}
-                                </span>
                                 <span class="matrix-fact-text">{{ row.nugget_text }}</span>
                             </div>
                         </td>
                         {% for src in matrix_sources %}
-                        <td class="matrix-cell cell-{{ row.cells|get_item:src }}"
+                        <td class="matrix-cell cell-{{ row.cells|get_item:src }}" data-source-name="{{ src }}"
                             title="{{ src }}: {{ row.cells|get_item:src|judgment_label }}">
                         </td>
                         {% endfor %}
@@ -1232,6 +1364,7 @@
 var omissionData = {{ omission_json|safe }};
 var toneData = {{ tone_json|safe }};
 var framingData = {{ framing_json|safe }};
+var contradictionsData = {{ contradictions_json|safe }};
 </script>
 <script src="{% static 'js/report_charts.js' %}"></script>
 {% endif %}
@@ -1286,21 +1419,30 @@ document.addEventListener('DOMContentLoaded', function () {
             rows.forEach(function (row) {
                 var show = true;
 
-                if (filter === 'vital') {
-                    show = row.dataset.importance === 'vital';
-                } else if (filter === 'tier1') {
+                if (filter === 'tier1') {
                     show = row.dataset.tier === '1';
                 } else if (filter === 'tier2') {
                     show = row.dataset.tier === '2';
-                } else if (filter === 'omitted') {
-                    var cells = row.querySelectorAll('.matrix-cell');
-                    show = Array.from(cells).some(function (c) {
-                        return c.classList.contains('cell-not_support');
-                    });
+                } else if (filter === 'tier3') {
+                    show = row.dataset.tier === '3';
                 }
 
                 row.classList.toggle('hidden-row', !show);
             });
+
+            // Sort by most omitted
+            if (filter === 'omitted') {
+                var containers = document.querySelectorAll('.fact-matrix-table tbody');
+                containers.forEach(function (tbody) {
+                    var sortedRows = Array.from(tbody.querySelectorAll('.matrix-row'));
+                    sortedRows.sort(function (a, b) {
+                        var aOmit = a.querySelectorAll('.cell-not_support').length;
+                        var bOmit = b.querySelectorAll('.cell-not_support').length;
+                        return bOmit - aOmit;
+                    });
+                    sortedRows.forEach(function (row) { tbody.appendChild(row); });
+                });
+            }
 
             // For themed layout: hide theme groups with no visible rows
             var themeGroups = document.querySelectorAll('.theme-group');
@@ -1320,12 +1462,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    // Auto-expand first theme group
-    var firstGroup = document.querySelector('.theme-group');
-    if (firstGroup) {
-        var btn = firstGroup.querySelector('.theme-toggle');
-        if (btn) toggleTheme(btn);
-    }
 });
 </script>
 {% endblock %}

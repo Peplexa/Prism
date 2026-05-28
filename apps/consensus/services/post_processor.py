@@ -18,7 +18,7 @@ from django.conf import settings
 
 from apps.extraction.services.llm_client import get_llm_client
 
-from ..models import ConsensusNugget, ConsensusPool, RawNugget
+from ..models import ConsensusNugget, ConsensusPool, Contradiction, RawNugget
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,90 @@ Event: {topic_title}
 Merge each cluster into one fact. Return ONLY a JSON array of strings, one per cluster, same order.
 
 {clusters_block}"""
+
+
+# ─── Contradiction prompts ───────────────────────────────────────────────────
+
+CONTRADICTION_SYSTEM_PROMPT = """\
+You are a fact-checker analyzing claims from multiple news sources about the same event. \
+You receive clusters of near-duplicate news facts. Each cluster was grouped because the \
+claims are semantically similar, but some may contain genuinely CONTRADICTORY claims.
+
+For each cluster, determine if all members AGREE or if there are CONTRADICTIONS.
+
+A contradiction means the claims are MUTUALLY EXCLUSIVE — both cannot be true at the same time.
+
+AGREE (not contradictions):
+- Synonyms or paraphrases: "agreement" vs "deal", "important" vs "more important" — AGREE.
+- Different levels of detail: "talks in Pakistan" vs "talks in Islamabad, Pakistan" — AGREE.
+- One has extra detail the other omits: "21-hour talks" vs "talks" — AGREE.
+- Complementary facts: "fire at 3pm" vs "fire destroyed 2 buildings" — AGREE.
+- Approximate vs exact: "about a dozen injured" vs "12 injured" — AGREE.
+- Tense differences: "has met" vs "will meet" — AGREE.
+- Name variants: "Zelenskyy" vs "Volodymyr Zelenskyy" — AGREE.
+
+CONTRADICT (genuine contradictions):
+- Different specific numbers for the SAME metric: "12 killed" vs "8 killed" — CONTRADICT.
+- Opposite outcomes: "bill passed" vs "bill failed" — CONTRADICT.
+- Directly opposing claims: "approved" vs "rejected", "ahead of" vs "after" — CONTRADICT.
+- Different specific dates: "April 13" vs "April 14" — CONTRADICT.
+- Mutually exclusive characterizations: "is weapons-grade" vs "is not weapons-grade" — CONTRADICT.
+
+If some members are vague or ambiguous (e.g. a day name when others say specific dates), \
+fold them into the most compatible group rather than making a separate group.
+
+Output ONLY a JSON array of objects, one per cluster, same order:
+[{{"status": "agree"}}, {{"status": "contradict", "groups": [[0, 2], [1, 3]], \
+"explanation": "Members 0,2 say 12 killed while members 1,3 say 8 killed"}}]
+
+In "groups", list the 0-indexed member positions that agree with each other. \
+Every member must appear in exactly one group. The first group should be the \
+sub-group with more members (or alphabetically first source if tied)."""
+
+CONTRADICTION_USER_TEMPLATE = """\
+Event: {topic_title}
+
+Date reference (for resolving day names):
+{date_reference}
+
+Check each cluster for internal contradictions. Return a JSON array, one entry per cluster.
+
+{clusters_block}"""
+
+
+VERIFY_SYSTEM_PROMPT = """\
+You are a strict fact verification expert. You are given pairs of claims that were flagged \
+as potentially contradictory. Your job is to VERIFY whether each pair is a genuine contradiction.
+
+A genuine contradiction means the two claims are MUTUALLY EXCLUSIVE — both CANNOT be true \
+at the same time. Be strict. Only confirm real contradictions.
+
+NOT contradictions (reject these):
+- Synonyms or paraphrases: "agreement" vs "deal" — SAME THING
+- Different detail levels: "Pakistan" vs "Islamabad, Pakistan" — SAME THING
+- Name variants: "Zelenskyy" vs "Volodymyr Zelenskyy" — SAME THING
+- Tense differences: "has met" vs "will meet" — NOT a contradiction
+- Vague vs specific that could match: "Monday" vs "April 14" if Monday was April 14 — NOT a contradiction
+- Complementary facts from the same list — NOT a contradiction
+
+REAL contradictions (confirm these):
+- Different numbers for same metric: "12 killed" vs "8 killed"
+- Opposite outcomes: "passed" vs "failed"
+- Directly opposing: "approved" vs "rejected"
+- Different specific dates: "April 13" vs "April 14"
+
+For each pair, output "confirm" or "reject".
+Output ONLY a JSON array of strings: ["confirm", "reject", "confirm", ...]"""
+
+VERIFY_USER_TEMPLATE = """\
+Event: {topic_title}
+
+Date reference (for resolving day names):
+{date_reference}
+
+Verify each flagged contradiction. Are these genuinely mutually exclusive?
+
+{pairs_block}"""
 
 
 # ─── Tier prompts ────────────────────────────────────────────────────────────
@@ -128,6 +212,19 @@ Group these facts into {min_themes}-{max_themes} named themes."""
 
 # ─── Data classes ─────────────────────────────────────────────────────────────
 
+def _build_date_reference():
+    """Build a 3-week date-to-day mapping for the LLM."""
+    from datetime import date, timedelta
+    today = date.today()
+    start = today - timedelta(days=7)
+    lines = []
+    for i in range(21):
+        d = start + timedelta(days=i)
+        marker = " (today)" if d == today else ""
+        lines.append(f"{d.strftime('%A')} = {d.strftime('%B %d, %Y')}{marker}")
+    return "\n".join(lines)
+
+
 @dataclass
 class PostProcessingResult:
     """Outcome of the full post-processing pass."""
@@ -136,6 +233,7 @@ class PostProcessingResult:
     tier2_count: int
     tier3_count: int
     theme_count: int = 0
+    contradictions_found: int = 0
 
 
 # ─── Service ──────────────────────────────────────────────────────────────────
@@ -157,10 +255,11 @@ class NuggetPostProcessor:
         self.tier2_target = getattr(settings, 'CONSENSUS_TIER2_TARGET', 15)
 
     def process(self, pool: ConsensusPool) -> PostProcessingResult:
-        """Run merge, tier assignment, then theme grouping."""
+        """Run merge (with contradiction check), tier assignment, then theme grouping."""
         nuggets_merged = self._merge_clusters(pool)
         tier1, tier2, tier3 = self._assign_tiers(pool)
         theme_count = self._assign_themes(pool)
+        contradictions_found = pool.contradictions.count()
 
         return PostProcessingResult(
             nuggets_merged=nuggets_merged,
@@ -168,6 +267,7 @@ class NuggetPostProcessor:
             tier2_count=tier2,
             tier3_count=tier3,
             theme_count=theme_count,
+            contradictions_found=contradictions_found,
         )
 
     # ── Step 1: Merge ────────────────────────────────────────────────────────
@@ -197,6 +297,13 @@ class NuggetPostProcessor:
 
         if not multi_member:
             logger.info("No multi-member clusters to merge")
+            return 0
+
+        # Check for contradictions before merging
+        multi_member = self._check_contradictions(pool, multi_member)
+
+        if not multi_member:
+            logger.info("No multi-member clusters remain after contradiction check")
             return 0
 
         # Process in batches
@@ -256,6 +363,333 @@ class NuggetPostProcessor:
 
         logger.debug(f"Merged {len(updated)}/{len(batch)} clusters in batch")
         return len(updated)
+
+    # ── Contradiction detection ──────────────────────────────────────────────
+
+    def _check_contradictions(
+        self,
+        pool: ConsensusPool,
+        multi_member: list[tuple[ConsensusNugget, list[str]]],
+    ) -> list[tuple[ConsensusNugget, list[str]]]:
+        """
+        LLM-check multi-member clusters for internal contradictions.
+
+        Splits contradictory clusters into agreeing sub-groups, creating
+        new ConsensusNuggets and Contradiction records as needed.
+
+        Returns the updated multi_member list with contradictory clusters
+        removed and their agreeing sub-groups re-added if still multi-member.
+        """
+        all_results = []
+        for batch_start in range(0, len(multi_member), self.merge_batch_size):
+            batch = multi_member[batch_start:batch_start + self.merge_batch_size]
+            batch_results = self._check_contradiction_batch(pool, batch)
+            all_results.extend(batch_results)
+
+        surviving = []
+        splits = 0
+        for i, (cn, raw_texts) in enumerate(multi_member):
+            if i >= len(all_results) or all_results[i] is None:
+                surviving.append((cn, raw_texts))
+                continue
+
+            result = all_results[i]
+            if result['status'] == 'agree':
+                surviving.append((cn, raw_texts))
+                continue
+
+            # Contradictory cluster — split it
+            new_nuggets = self._split_cluster(
+                pool, cn, result['groups'],
+                result.get('explanation', 'Conflicting claims detected.'),
+            )
+            splits += 1
+
+            # Re-add sub-groups that still have multiple members
+            for new_cn in new_nuggets:
+                new_raw = list(
+                    new_cn.raw_nuggets.values_list('nugget_text', flat=True)
+                )
+                if len(new_raw) > 1:
+                    surviving.append((new_cn, new_raw))
+
+        if splits:
+            logger.info(f"Split {splits} contradictory clusters")
+
+        return surviving
+
+    def _check_contradiction_batch(
+        self,
+        pool: ConsensusPool,
+        batch: list[tuple[ConsensusNugget, list[str]]],
+    ) -> list[dict | None]:
+        """Check a batch of clusters for contradictions via LLM."""
+        cluster_lines = []
+        for i, (cn, raw_texts) in enumerate(batch, 1):
+            members = "\n".join(
+                f'  {j}) "{text}"'
+                for j, text in enumerate(raw_texts)
+            )
+            cluster_lines.append(
+                f"Cluster {i} ({cn.source_count} sources):\n{members}"
+            )
+
+        clusters_block = "\n\n".join(cluster_lines)
+        user_prompt = CONTRADICTION_USER_TEMPLATE.format(
+            topic_title=pool.topic.title,
+            date_reference=_build_date_reference(),
+            clusters_block=clusters_block,
+        )
+
+        try:
+            response = self.client.generate(
+                prompt=user_prompt,
+                system=CONTRADICTION_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            return self._parse_contradiction_response(response, len(batch))
+        except Exception as e:
+            logger.warning(
+                f"Contradiction check failed, assuming no contradictions: {e}"
+            )
+            return [None] * len(batch)
+
+    @classmethod
+    def _parse_contradiction_response(
+        cls, response: str, expected_count: int
+    ) -> list[dict | None]:
+        """Parse contradiction check response into list of results."""
+        response = cls._clean_response(response)
+
+        parsed = None
+        try:
+            parsed = json.loads(response)
+        except json.JSONDecodeError:
+            match = re.search(r'\[.*\]', response, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+
+        if not parsed or not isinstance(parsed, list):
+            logger.warning(
+                f"Could not parse contradiction response: {response[:200]}"
+            )
+            return [None] * expected_count
+
+        results = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                results.append(None)
+                continue
+            status = item.get('status', 'agree')
+            if status == 'agree':
+                results.append({'status': 'agree'})
+            elif status == 'contradict':
+                groups = item.get('groups', [])
+                explanation = item.get('explanation', '')
+                if len(groups) >= 2:
+                    results.append({
+                        'status': 'contradict',
+                        'groups': groups,
+                        'explanation': explanation,
+                    })
+                else:
+                    results.append(None)
+            else:
+                results.append(None)
+
+        while len(results) < expected_count:
+            results.append(None)
+        return results[:expected_count]
+
+    def _split_cluster(
+        self,
+        pool: ConsensusPool,
+        original_cn: ConsensusNugget,
+        groups: list[list[int]],
+        explanation: str,
+    ) -> list[ConsensusNugget]:
+        """
+        Split a contradictory ConsensusNugget into sub-groups.
+
+        Group 0 (majority) keeps the original ConsensusNugget.
+        Group 1+ become new ConsensusNuggets.
+        Contradiction records link each pair (nugget_a = majority side).
+        """
+        raw_nuggets = list(
+            original_cn.raw_nuggets
+            .select_related('article__source')
+            .order_by('id')
+        )
+
+        # Validate group indices
+        all_indices = set()
+        for group in groups:
+            all_indices.update(group)
+        if not all_indices or max(all_indices) >= len(raw_nuggets):
+            logger.warning(
+                f"Invalid group indices for cluster {original_cn.cluster_id}, "
+                f"skipping split"
+            )
+            return [original_cn]
+
+        group_nuggets = []
+        for group_idx, member_indices in enumerate(groups):
+            group_raw = [
+                raw_nuggets[j] for j in member_indices
+                if j < len(raw_nuggets)
+            ]
+            if not group_raw:
+                continue
+
+            group_sources = sorted(set(
+                rn.article.source.name for rn in group_raw
+            ))
+
+            if group_idx == 0:
+                # Update original nugget with group-0 data
+                original_cn.nugget_text = group_raw[0].nugget_text
+                original_cn.source_count = len(group_sources)
+                original_cn.source_names = group_sources
+                original_cn.save(update_fields=[
+                    'nugget_text', 'source_count', 'source_names',
+                ])
+                for rn in group_raw:
+                    rn.consensus_nugget = original_cn
+                RawNugget.objects.bulk_update(group_raw, ['consensus_nugget'])
+                group_nuggets.append(original_cn)
+            else:
+                new_cn = ConsensusNugget.objects.create(
+                    pool=pool,
+                    nugget_text=group_raw[0].nugget_text,
+                    importance=original_cn.importance,
+                    source_count=len(group_sources),
+                    source_names=group_sources,
+                    cluster_id=original_cn.cluster_id,
+                )
+                for rn in group_raw:
+                    rn.consensus_nugget = new_cn
+                RawNugget.objects.bulk_update(group_raw, ['consensus_nugget'])
+                group_nuggets.append(new_cn)
+
+        # Create Contradiction records — nugget_a = side with more sources
+        for i in range(len(group_nuggets)):
+            for j in range(i + 1, len(group_nuggets)):
+                a, b = group_nuggets[i], group_nuggets[j]
+                # Ensure nugget_a is the majority side
+                if b.source_count > a.source_count:
+                    a, b = b, a
+                Contradiction.objects.create(
+                    pool=pool, nugget_a=a, nugget_b=b,
+                    explanation=explanation,
+                )
+
+        # Update pool nugget count
+        pool.nugget_count = pool.nuggets.count()
+        pool.save(update_fields=['nugget_count'])
+
+        logger.info(
+            f"Split cluster {original_cn.cluster_id} into "
+            f"{len(group_nuggets)} sub-groups"
+        )
+        return group_nuggets
+
+    def _verify_contradictions(self, pool: ConsensusPool) -> int:
+        """
+        Pass 2: Verify flagged contradictions via LLM.
+
+        Removes false positives by asking the LLM to strictly confirm
+        each contradiction. Deletes rejected Contradiction records and
+        merges the nuggets back.
+        """
+        contradictions = list(
+            pool.contradictions.select_related('nugget_a', 'nugget_b').all()
+        )
+        if not contradictions:
+            return 0
+
+        # Build pairs block for verification
+        pairs = []
+        for i, c in enumerate(contradictions, 1):
+            pairs.append(
+                f"Pair {i}:\n"
+                f'  A) "{c.nugget_a.nugget_text}"\n'
+                f'  B) "{c.nugget_b.nugget_text}"\n'
+                f'  Flagged because: {c.explanation}'
+            )
+        pairs_block = "\n\n".join(pairs)
+
+        user_prompt = VERIFY_USER_TEMPLATE.format(
+            topic_title=pool.topic.title,
+            date_reference=_build_date_reference(),
+            pairs_block=pairs_block,
+        )
+
+        try:
+            response = self.client.generate(
+                prompt=user_prompt,
+                system=VERIFY_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=4096,
+            )
+            verdicts = self._parse_verify_response(response, len(contradictions))
+        except Exception as e:
+            logger.warning(f"Verification failed, keeping all contradictions: {e}")
+            return len(contradictions)
+
+        # Process verdicts — delete rejected contradictions
+        verified = 0
+        for i, c in enumerate(contradictions):
+            if i < len(verdicts) and verdicts[i] == 'confirm':
+                verified += 1
+            else:
+                # Rejected — delete the contradiction record
+                # (the split nuggets remain as separate consensus nuggets,
+                # which is fine — they just won't be linked as contradictions)
+                c.delete()
+                logger.debug(
+                    f"Rejected contradiction: {c.nugget_a.nugget_text[:40]} "
+                    f"vs {c.nugget_b.nugget_text[:40]}"
+                )
+
+        return verified
+
+    @classmethod
+    def _parse_verify_response(
+        cls, response: str, expected_count: int
+    ) -> list[str]:
+        """Parse verification response into list of 'confirm'/'reject'."""
+        response = cls._clean_response(response)
+
+        parsed = None
+        try:
+            parsed = json.loads(response)
+        except json.JSONDecodeError:
+            match = re.search(r'\[.*\]', response, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+
+        if not parsed or not isinstance(parsed, list):
+            logger.warning(f"Could not parse verify response: {response[:200]}")
+            return ['confirm'] * expected_count  # default to keeping
+
+        results = []
+        for item in parsed:
+            val = str(item).lower().strip()
+            if 'confirm' in val:
+                results.append('confirm')
+            else:
+                results.append('reject')
+
+        while len(results) < expected_count:
+            results.append('confirm')
+        return results[:expected_count]
 
     # ── Step 2: Tier ─────────────────────────────────────────────────────────
 
@@ -319,8 +753,8 @@ class NuggetPostProcessor:
             facts_block=facts_block,
         )
 
-        # Scale max_tokens: ~3 tokens per item, with headroom
-        tier_max_tokens = max(4096, len(nuggets) * 4 + 512)
+        # Scale max_tokens: ~10 tokens per item, with headroom for reasoning
+        tier_max_tokens = max(8192, len(nuggets) * 10 + 1024)
 
         try:
             response = self.client.generate(
@@ -474,7 +908,7 @@ class NuggetPostProcessor:
                 prompt=user_prompt,
                 system=system,
                 temperature=0.2,
-                max_tokens=4096,
+                max_tokens=8192,
             )
             themes = self._parse_theme_response(response, num_nuggets)
         except Exception as e:

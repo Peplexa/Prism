@@ -69,6 +69,7 @@
             // Row container
             var row = document.createElement('div');
             row.className = 'tl-row';
+            row.setAttribute('data-source-name', item.source_name);
             row.title = item.source_name + ' \u2014 ' + timeStr +
                 (item.delta_minutes > 0 ? ' (+' + item.delta_minutes + 'm)' : ' (First)') +
                 (item.article_count > 1 ? ' \u2014 ' + item.article_count + ' articles' : '');

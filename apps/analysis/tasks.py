@@ -68,14 +68,17 @@ def analyze_article(self, article_id):
     }
 
     if len(errors) >= 2:
-        # Both analyses failed — likely a transient issue, retry
+        # Both analyses failed
         analysis.status = ArticleAnalysis.AnalysisStatus.FAILED
         analysis.error_message = '; '.join(errors)
         analysis.save()
-        raise self.retry(
-            exc=Exception(analysis.error_message),
-            countdown=60,
-        )
+        # Only retry if running as a Celery task (has request context)
+        if hasattr(self, 'request') and self.request.id:
+            raise self.retry(
+                exc=Exception(analysis.error_message),
+                countdown=60,
+            )
+        return f"Article {article_id}: failed"
     elif errors:
         # One analysis failed — save partial results
         analysis.status = ArticleAnalysis.AnalysisStatus.FAILED

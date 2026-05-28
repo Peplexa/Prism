@@ -19,7 +19,6 @@ class TestSourceModel:
             slug='test-source',
             website_url='https://example.com',
             event_registry_uri='example.com',
-            known_bias=Source.BiasRating.CENTER,
         )
 
         assert source.id is not None
@@ -59,17 +58,15 @@ class TestSourceModel:
         """Test source string representation."""
         assert str(source_npr) == 'NPR'
 
-    def test_source_bias_choices(self, db):
-        """Test all bias rating choices are valid."""
-        for bias_value, bias_label in Source.BiasRating.choices:
-            source = Source.objects.create(
-                name=f'Source {bias_label}',
-                slug=f'source-{bias_value}',
-                website_url=f'https://{bias_value}.com',
-                event_registry_uri=f'{bias_value}.com',
-                known_bias=bias_value,
-            )
-            assert source.known_bias == bias_value
+    def test_source_active_default(self, db):
+        """Test source is active by default."""
+        source = Source.objects.create(
+            name='Active Source',
+            slug='active-source',
+            website_url='https://active.com',
+            event_registry_uri='active.com',
+        )
+        assert source.is_active is True
 
 
 class TestArticleModel:

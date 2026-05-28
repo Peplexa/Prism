@@ -131,7 +131,7 @@ class NeutralSummarizer:
             summary.summary_text = response.strip()
             summary.nuggets_used = len(nuggets)
             summary.model_name = getattr(
-                settings, 'DEEPSEEK_MODEL', 'deepseek-chat'
+                settings, 'DEEPSEEK_MODEL', 'deepseek-reasoner'
             )
             summary.status = NeutralSummary.Status.COMPLETE
             summary.generated_at = timezone.now()

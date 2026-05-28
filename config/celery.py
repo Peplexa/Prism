@@ -16,10 +16,10 @@ app.autodiscover_tasks()
 
 # Celery Beat schedule
 app.conf.beat_schedule = {
-    # Poll Event Registry for new events every 5 minutes
+    # Poll Event Registry for new events every 2 minutes
     'fetch-events': {
         'task': 'apps.articles.tasks.fetch_events',
-        'schedule': crontab(minute='*/5'),
+        'schedule': crontab(minute='*/2'),
     },
 
     # Update trending scores every 15 minutes
@@ -44,6 +44,12 @@ app.conf.beat_schedule = {
     'build-consensus-pools': {
         'task': 'apps.consensus.tasks.build_pools_for_ready_topics',
         'schedule': crontab(minute='*/30'),
+    },
+
+    # Rebuild stale pools when new articles arrive (every 30 min, offset)
+    'rebuild-stale-pools': {
+        'task': 'apps.consensus.tasks.rebuild_stale_pools',
+        'schedule': crontab(minute='15,45'),
     },
 
     # Generate neutral summaries for topics with completed pools (hourly at :15)

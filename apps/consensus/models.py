@@ -5,12 +5,14 @@ from django.db import models
 from apps.core.models import TimestampedModel
 
 
-def _bias_class(known_bias):
-    """Map Source.BiasRating to simple left/center/right."""
-    if known_bias in ('far_left', 'left', 'center_left'):
-        return 'left'
-    elif known_bias in ('far_right', 'right', 'center_right'):
-        return 'right'
+def _get_article_leaning(article):
+    """Get the detected political leaning for an article from its analysis."""
+    try:
+        analysis = article.analysis
+        if analysis.status == 'complete' and analysis.dominant_leaning:
+            return analysis.dominant_leaning
+    except Exception:
+        pass
     return 'center'
 
 
@@ -88,7 +90,7 @@ class ConsensusPool(TimestampedModel):
             score_source_map[score.id] = src.name
             omission_data.append({
                 'source_name': src.name,
-                'bias': _bias_class(src.known_bias),
+                'bias': _get_article_leaning(score.article),
                 'coverage_pct': round(score.coverage_score * 100),
                 'weighted_coverage_pct': round(weighted * 100),
             })
@@ -110,12 +112,12 @@ class ConsensusPool(TimestampedModel):
             except ArticleAnalysis.DoesNotExist:
                 continue
 
-            bias = _bias_class(article.source.known_bias)
+            leaning = analysis.dominant_leaning or 'center'
 
             if analysis.subjectivity_ratio is not None:
                 tone_data.append({
                     'source_name': article.source.name,
-                    'bias': bias,
+                    'bias': leaning,
                     'subjectivity_pct': round(analysis.subjectivity_ratio * 100),
                     'tone_label': analysis.tone_label,
                 })
@@ -123,7 +125,7 @@ class ConsensusPool(TimestampedModel):
             if analysis.leaning_left is not None:
                 framing_data.append({
                     'source_name': article.source.name,
-                    'bias': bias,
+                    'bias': leaning,
                     'left_pct': round(analysis.leaning_left * 100),
                     'center_pct': round(analysis.leaning_center * 100),
                     'right_pct': round(analysis.leaning_right * 100),
@@ -197,6 +199,57 @@ class ConsensusPool(TimestampedModel):
                 matrix_data[nug_key] = {}
             matrix_data[nug_key][src_name] = label
 
+        # --- Contradictions ---
+        # Group contradictions by explanation (same cluster split = one conflict)
+        from collections import OrderedDict
+        conflict_groups = OrderedDict()
+        for c in self.contradictions.select_related('nugget_a', 'nugget_b').all():
+            key = c.explanation
+            if key not in conflict_groups:
+                conflict_groups[key] = {
+                    'nugget_ids': set(),
+                    'explanation': c.explanation,
+                }
+            conflict_groups[key]['nugget_ids'].add(c.nugget_a_id)
+            conflict_groups[key]['nugget_ids'].add(c.nugget_b_id)
+
+        contradiction_data = []
+        for group in conflict_groups.values():
+            claims = []
+            for nug_id in group['nugget_ids']:
+                nug = ConsensusNugget.objects.get(id=nug_id)
+                judgments = matrix_data.get(str(nug_id), {})
+                supporters = [
+                    src for src, label in judgments.items()
+                    if label in ('support', 'partial_support')
+                ]
+                claims.append({
+                    'nugget_id': nug_id,
+                    'text': nug.nugget_text,
+                    'sources': nug.source_names,
+                    'supporters': supporters,
+                })
+            # Sort by supporter count descending (majority first)
+            claims.sort(key=lambda c: len(c['supporters']), reverse=True)
+
+            # Skip if any side has 0 supporters (no article actually backed it)
+            if any(len(c['supporters']) == 0 for c in claims):
+                continue
+
+            # Determine if there's a clear consensus
+            if len(claims) >= 2:
+                top = len(claims[0]['supporters'])
+                total_supporters = sum(len(c['supporters']) for c in claims)
+                consensus_index = 0 if total_supporters > 0 and top / total_supporters >= 0.65 else -1
+            else:
+                consensus_index = -1
+
+            contradiction_data.append({
+                'claims': claims,
+                'explanation': group['explanation'],
+                'consensus_index': consensus_index,
+            })
+
         self.report_cache = {
             'omission_data': omission_data,
             'tone_data': tone_data,
@@ -205,6 +258,7 @@ class ConsensusPool(TimestampedModel):
             'nuggets': nuggets_data,
             'matrix_data': matrix_data,
             'matrix_sources': scored_source_names,
+            'contradictions': contradiction_data,
         }
         self.save(update_fields=['report_cache'])
 
@@ -386,3 +440,44 @@ class NuggetJudgment(TimestampedModel):
 
     def __str__(self):
         return f"{self.consensus_nugget.nugget_text[:40]} → {self.label}"
+
+
+class Contradiction(TimestampedModel):
+    """
+    A detected contradiction between two consensus nuggets in the same pool.
+
+    Created during post-processing when a multi-member cluster contains
+    internally conflicting claims. The cluster is split and this record
+    links the resulting nugget pair.
+
+    Convention: nugget_a = majority/consensus side, nugget_b = minority.
+    """
+
+    pool = models.ForeignKey(
+        ConsensusPool,
+        on_delete=models.CASCADE,
+        related_name='contradictions',
+    )
+    nugget_a = models.ForeignKey(
+        ConsensusNugget,
+        on_delete=models.CASCADE,
+        related_name='contradictions_as_a',
+    )
+    nugget_b = models.ForeignKey(
+        ConsensusNugget,
+        on_delete=models.CASCADE,
+        related_name='contradictions_as_b',
+    )
+    explanation = models.TextField(
+        help_text='LLM-generated explanation of the contradiction.',
+    )
+
+    class Meta:
+        unique_together = ['nugget_a', 'nugget_b']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return (
+            f"Contradiction: {self.nugget_a.nugget_text[:30]}... "
+            f"vs {self.nugget_b.nugget_text[:30]}..."
+        )

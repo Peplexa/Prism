@@ -15,8 +15,8 @@
     <!-- Article Header -->
     <header class="topic-header">
         <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
-            <span class="article-source-badge bias-{{ article.source.known_bias }}">
-                {{ article.source.get_known_bias_display }}
+            <span class="article-source-badge bias-{{ article.analysis.dominant_leaning|default:'center' }}">
+                {{ article.analysis.dominant_leaning|default:"center"|title }}
             </span>
             <a href="{{ article.source.website_url }}" target="_blank" rel="noopener noreferrer" class="text-muted">
                 {{ article.source.name }}
@@ -136,7 +136,7 @@
             {% for related in related_articles %}
             <a href="{% url 'web:article-detail' pk=related.pk %}" class="article-card">
                 <div class="article-source">
-                    <span class="article-source-badge bias-{{ related.source.known_bias }}">
+                    <span class="article-source-badge bias-{{ related.analysis.dominant_leaning|default:'center' }}">
                         {{ related.source.name|slice:":3"|upper }}
                     </span>
                 </div>

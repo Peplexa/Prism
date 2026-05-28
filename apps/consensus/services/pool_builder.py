@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.conf import settings
 from django.db import transaction
@@ -71,11 +72,17 @@ class PoolBuilder:
         topic = Topic.objects.get(id=topic_id)
 
         # Handle existing pool
+        existing_pool = None
         if hasattr(topic, 'consensus_pool') and topic.consensus_pool:
             if not rebuild:
                 logger.info(f"Pool already exists for topic {topic_id}")
                 return topic.consensus_pool
-            topic.consensus_pool.delete()
+            existing_pool = topic.consensus_pool
+            # Cache raw nuggets from existing pool before deleting
+            cached_nuggets = self._cache_raw_nuggets(existing_pool)
+            existing_pool.delete()
+        else:
+            cached_nuggets = {}
 
         pool = ConsensusPool.objects.create(
             topic=topic,
@@ -91,10 +98,10 @@ class PoolBuilder:
             return pool
 
         try:
-            # Step 1: Extract nuggets
+            # Step 1: Extract nuggets (reuse cached where possible)
             pool.status = ConsensusPool.Status.EXTRACTING
             pool.save(update_fields=['status'])
-            self._extract_nuggets(pool, articles)
+            self._extract_nuggets(pool, articles, cached_nuggets)
 
             # Step 2: Deduplicate
             pool.status = ConsensusPool.Status.DEDUPLICATING
@@ -157,36 +164,88 @@ class PoolBuilder:
             .select_related('source')
         )
 
+    @staticmethod
+    def _cache_raw_nuggets(pool: ConsensusPool) -> dict[int, list[dict]]:
+        """Cache raw nuggets from an existing pool, keyed by article ID."""
+        cached = {}
+        for rn in pool.raw_nuggets.values('article_id', 'nugget_text', 'nugget_type'):
+            cached.setdefault(rn['article_id'], []).append({
+                'fact': rn['nugget_text'],
+                'type': rn['nugget_type'],
+            })
+        return cached
+
     def _extract_nuggets(
-        self, pool: ConsensusPool, articles: list[Article]
+        self,
+        pool: ConsensusPool,
+        articles: list[Article],
+        cached_nuggets: dict[int, list[dict]] | None = None,
     ) -> None:
-        """Step 1: Extract nuggets from each article using NuggetExtractor."""
-        extractor = NuggetExtractor(backend=self.backend)
-        pool.model_name = getattr(settings, 'DEEPSEEK_MODEL', 'deepseek-chat')
+        """Step 1: Extract nuggets from each article, reusing cached where available."""
+        pool.model_name = getattr(settings, 'DEEPSEEK_MODEL', 'deepseek-reasoner')
+        cached_nuggets = cached_nuggets or {}
 
+        # Separate cached vs. needs-extraction
+        to_extract = []
         for article in articles:
-            try:
-                nuggets = extractor.extract(article.content, domain='news')
-
+            if article.id in cached_nuggets:
+                # Immediately save cached nuggets (no LLM call needed)
                 raw_objects = [
                     RawNugget(
-                        pool=pool,
-                        article=article,
-                        nugget_text=n['fact'],
-                        nugget_type=n.get('type', ''),
+                        pool=pool, article=article,
+                        nugget_text=n['fact'], nugget_type=n.get('type', ''),
                     )
-                    for n in nuggets
+                    for n in cached_nuggets[article.id]
                 ]
                 RawNugget.objects.bulk_create(raw_objects)
-
                 logger.debug(
-                    f"Extracted {len(nuggets)} nuggets from "
+                    f"Cached {len(raw_objects)} nuggets from "
                     f"{article.source.name}: {article.title[:40]}"
                 )
-            except Exception as e:
-                logger.error(
-                    f"Extraction failed for article {article.id}: {e}"
-                )
+            else:
+                to_extract.append(article)
+
+        if cached_nuggets:
+            cached_count = len(articles) - len(to_extract)
+            logger.info(
+                f"Reused cached nuggets for {cached_count}/{len(articles)} articles"
+            )
+
+        if not to_extract:
+            pool.save(update_fields=['model_name'])
+            return
+
+        # Parallel extraction for new articles
+        def _extract_one(article):
+            extractor = NuggetExtractor(backend=self.backend)
+            nuggets = extractor.extract(article.content, domain='news')
+            return article, nuggets
+
+        max_workers = min(len(to_extract), 20)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_extract_one, a): a for a in to_extract
+            }
+            for future in as_completed(futures):
+                article = futures[future]
+                try:
+                    _, nuggets = future.result()
+                    raw_objects = [
+                        RawNugget(
+                            pool=pool, article=article,
+                            nugget_text=n['fact'], nugget_type=n.get('type', ''),
+                        )
+                        for n in nuggets
+                    ]
+                    RawNugget.objects.bulk_create(raw_objects)
+                    logger.debug(
+                        f"Extracted {len(nuggets)} nuggets from "
+                        f"{article.source.name}: {article.title[:40]}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Extraction failed for article {article.id}: {e}"
+                    )
 
         pool.save(update_fields=['model_name'])
 
@@ -195,9 +254,9 @@ class PoolBuilder:
         Compute effective vital threshold scaling with source count.
 
         For 2-4 sources, requires 2+ sources (any corroboration).
-        For 5+ sources, requires at least 40% to call something vital.
+        For 5+ sources, requires at least 25% to call something vital.
         """
-        return max(2, math.ceil(num_articles * 0.4))
+        return max(2, math.ceil(num_articles * 0.25))
 
     def _deduplicate_nuggets(
         self, pool: ConsensusPool, num_articles: int = 2
@@ -281,7 +340,7 @@ class PoolBuilder:
     def _score_articles(
         self, pool: ConsensusPool, articles: list[Article]
     ) -> None:
-        """Step 3: Score each article against the consensus pool."""
+        """Step 3: Score each article against the consensus pool (parallel)."""
         consensus_nuggets = list(pool.nuggets.order_by('id'))
         if not consensus_nuggets:
             return
@@ -292,25 +351,39 @@ class PoolBuilder:
             if cn.importance == ConsensusNugget.Importance.VITAL
         }
 
-        assigner = AutoAssigner(backend=self.backend)
+        def _score_one(article):
+            # Each thread gets its own AutoAssigner (own LLM client)
+            assigner = AutoAssigner(backend=self.backend)
+            self._score_single_article(
+                pool, article, assigner,
+                consensus_nuggets, consensus_texts, vital_indices,
+            )
+            return article
 
         scored = 0
-        for article in articles:
-            try:
-                self._score_single_article(
-                    pool, article, assigner,
-                    consensus_nuggets, consensus_texts, vital_indices,
-                )
-                scored += 1
-            except Exception as e:
-                logger.error(
-                    f"Scoring failed for article {article.id}: {e}"
-                )
-                OmissionScore.objects.update_or_create(
-                    pool=pool,
-                    article=article,
-                    defaults={'error_message': str(e)[:1000]},
-                )
+        max_workers = min(len(articles), 20)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_score_one, a): a for a in articles
+            }
+            for future in as_completed(futures):
+                article = futures[future]
+                try:
+                    future.result()
+                    scored += 1
+                    logger.debug(
+                        f"Scored article {scored}/{len(articles)}: "
+                        f"{article.source.name}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Scoring failed for article {article.id}: {e}"
+                    )
+                    OmissionScore.objects.update_or_create(
+                        pool=pool,
+                        article=article,
+                        defaults={'error_message': str(e)[:1000]},
+                    )
 
         pool.articles_processed = scored
         pool.save(update_fields=['articles_processed'])

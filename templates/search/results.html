@@ -38,16 +38,19 @@
     <div class="topic-grid">
         {% for topic in topics %}
         <a href="{% url 'web:topic-detail' slug=topic.slug %}" class="topic-card">
-            <h3>{{ topic.title }}</h3>
-            <div class="topic-meta">
-                <span>{{ topic.article_count }} articles</span>
-                <span>{{ topic.source_count }} sources</span>
+            {% if topic.image_url %}<div class="topic-card-img" style="background-image: url('{{ topic.image_url }}')"></div>{% endif %}
+            <div class="topic-card-body">
+                <h3>{{ topic.title }}</h3>
+                <div class="topic-meta">
+                    <span>{{ topic.article_count }} articles</span>
+                    <span>{{ topic.source_count }} sources</span>
+                </div>
+                {% if topic.keywords %}
+                <p class="text-muted mt-1" style="font-size: 0.75rem;">
+                    {{ topic.keywords|slice:":5"|join:", " }}
+                </p>
+                {% endif %}
             </div>
-            {% if topic.keywords %}
-            <p class="text-muted mt-1" style="font-size: 0.75rem;">
-                {{ topic.keywords|slice:":5"|join:", " }}
-            </p>
-            {% endif %}
         </a>
         {% endfor %}
     </div>

@@ -22,6 +22,7 @@ TOKENIZER_NAME = 'launch/POLITICS'
 # Module-level cache so the model is loaded once per process
 _model = None
 _tokenizer = None
+_lock = __import__('threading').Lock()
 
 # Simple sentence splitter — splits on .!? followed by whitespace + uppercase
 _SENT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z"\u201c])')
@@ -29,11 +30,14 @@ _SENT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z"\u201c])')
 
 def _get_model_and_tokenizer():
     global _model, _tokenizer
-    if _model is None:
-        logger.info("Loading framing model: %s", MODEL_NAME)
-        _tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
-        _model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
-        _model.eval()
+    if _model is not None:
+        return _model, _tokenizer
+    with _lock:
+        if _model is None:
+            logger.info("Loading framing model: %s", MODEL_NAME)
+            _tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
+            _model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+            _model.eval()
     return _model, _tokenizer
 
 
@@ -106,10 +110,18 @@ class FramingAnalyzer:
         all_probs = torch.cat(all_probs, dim=0)
         avg_probs = all_probs.mean(dim=0)
 
+        # Model labels may be 'left'/'center'/'right' or generic 'LABEL_0' etc.
+        # Known mapping for matous-volf/political-leaning-politics:
+        #   0 = left, 1 = center, 2 = right
+        LABEL_MAP = {0: 'left', 1: 'center', 2: 'right'}
+
         scores = {}
         for idx, prob in enumerate(avg_probs.tolist()):
-            label = labels.get(idx, f'label_{idx}').lower()
-            scores[label] = prob
+            label = labels.get(idx, '').lower()
+            if label in ('left', 'center', 'right'):
+                scores[label] = prob
+            else:
+                scores[LABEL_MAP.get(idx, f'label_{idx}')] = prob
 
         return FramingResult(
             left=round(scores.get('left', 0.0), 4),

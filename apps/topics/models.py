@@ -22,6 +22,9 @@ class Topic(TimestampedModel):
         help_text="Event URI in Event Registry"
     )
 
+    # Image (from first article's image)
+    image_url = models.URLField(blank=True, default='', max_length=2000)
+
     # Topic metrics
     article_count = models.IntegerField(default=0)
     source_count = models.IntegerField(default=0)
@@ -91,17 +94,23 @@ class Topic(TimestampedModel):
         )
         covering_list = list(
             Source.objects.filter(pk__in=covering_ids)
-            .values('name', 'slug', 'known_bias')
+            .values('name', 'slug')
             .order_by('name')
         )
 
-        # "Notable" missing = sources with a known bias rating (editorially curated),
-        # not every auto-created source from Event Registry
+        # "Notable" missing = active sources not covering this topic
+        # Only include sources that have appeared in at least one
+        # consensus pool (i.e., editorially significant sources)
+        from apps.consensus.models import OmissionScore
+        scored_source_ids = set(
+            OmissionScore.objects.values_list(
+                'article__source_id', flat=True
+            ).distinct()
+        )
         notable_missing = list(
-            Source.objects.filter(is_active=True)
+            Source.objects.filter(is_active=True, pk__in=scored_source_ids)
             .exclude(pk__in=covering_ids)
-            .exclude(known_bias=Source.BiasRating.CENTER)
-            .values('name', 'slug', 'known_bias')
+            .values('name', 'slug')
             .order_by('name')
         )
 

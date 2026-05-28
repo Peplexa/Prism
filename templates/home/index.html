@@ -5,7 +5,7 @@
 <section class="hero">
     <div class="hero-content">
         <h1>See Every Side of the Story</h1>
-        <p>Analyze news bias across multiple sources and get balanced perspectives on current events.</p>
+        <p>Analyze news across multiple sources and get balanced perspectives on current events.</p>
 
         <!-- Search Bar -->
         <div class="search-container">
@@ -36,10 +36,13 @@
     <div class="topic-grid">
         {% for topic in trending_topics %}
         <a href="{% url 'web:topic-detail' slug=topic.slug %}" class="topic-card">
-            <h3>{{ topic.title }}</h3>
-            <div class="topic-meta">
-                <span>{{ topic.article_count }} articles</span>
-                <span>{{ topic.source_count }} sources</span>
+            {% if topic.image_url %}<div class="topic-card-img" style="background-image: url('{{ topic.image_url }}')"></div>{% endif %}
+            <div class="topic-card-body">
+                <h3>{{ topic.title }}</h3>
+                <div class="topic-meta">
+                    <span>{{ topic.article_count }} articles</span>
+                    <span>{{ topic.source_count }} sources</span>
+                </div>
             </div>
         </a>
         {% endfor %}

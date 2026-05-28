@@ -86,6 +86,47 @@ def build_pools_for_ready_topics(min_sources=None):
     return f"Queued {queued} topics"
 
 
+@shared_task
+def rebuild_stale_pools(min_new_articles=3):
+    """
+    Find topics where new articles have arrived since the pool was built
+    and queue a rebuild.
+
+    A pool is "stale" if the topic now has more non-wire articles than
+    the pool's articles_processed count by at least min_new_articles.
+
+    Args:
+        min_new_articles: Minimum new articles before triggering rebuild.
+    """
+    from apps.articles.models import Article
+    from .models import ConsensusPool
+
+    pools = ConsensusPool.objects.filter(status='complete').select_related('topic')
+    queued = 0
+
+    for pool in pools:
+        current_count = (
+            Article.objects.filter(
+                cluster__topic=pool.topic,
+                status=Article.ProcessingStatus.COMPLETE,
+                is_wire_content=False,
+            )
+            .exclude(content='')
+            .count()
+        )
+        new_articles = current_count - pool.articles_processed
+        if new_articles >= min_new_articles:
+            logger.info(
+                f"Topic '{pool.topic.title[:40]}' has {new_articles} new articles, "
+                f"queuing rebuild"
+            )
+            build_consensus_pool.delay(pool.topic_id, rebuild=True)
+            queued += 1
+
+    logger.info(f"Queued {queued} stale pools for rebuild")
+    return f"Queued {queued} stale pool rebuilds"
+
+
 @shared_task(bind=True, max_retries=2)
 def score_article_omission(self, article_id, pool_id):
     """

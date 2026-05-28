@@ -23,8 +23,16 @@
             <a href="{% url 'web:home' %}" class="navbar-brand">Prism</a>
             <button class="navbar-toggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
             <ul class="navbar-nav">
-                <li><a href="{% url 'web:home' %}" {% if request.resolver_match.url_name == 'home' %}class="active"{% endif %}>Home</a></li>
                 <li><a href="{% url 'web:ideas' %}" {% if request.resolver_match.url_name == 'ideas' %}class="active"{% endif %}>Ideas</a></li>
+            </ul>
+            <ul class="navbar-nav navbar-auth">
+                {% if user.is_authenticated %}
+                <li><span class="nav-user">{{ user.username }}</span></li>
+                <li><a href="{% url 'web:logout' %}">Log Out</a></li>
+                {% else %}
+                <li><a href="{% url 'web:login' %}">Log In</a></li>
+                <li><a href="{% url 'web:register' %}" class="btn-register">Register</a></li>
+                {% endif %}
             </ul>
         </div>
     </nav>

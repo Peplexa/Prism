@@ -6,15 +6,6 @@ from apps.core.models import TimestampedModel
 class Source(TimestampedModel):
     """News source configuration."""
 
-    class BiasRating(models.TextChoices):
-        FAR_LEFT = 'far_left', 'Far Left'
-        LEFT = 'left', 'Left'
-        CENTER_LEFT = 'center_left', 'Center Left'
-        CENTER = 'center', 'Center'
-        CENTER_RIGHT = 'center_right', 'Center Right'
-        RIGHT = 'right', 'Right'
-        FAR_RIGHT = 'far_right', 'Far Right'
-
     name = models.CharField(max_length=200)
     slug = models.SlugField(unique=True)
     website_url = models.URLField()
@@ -29,12 +20,6 @@ class Source(TimestampedModel):
         help_text="Source URI in Event Registry (e.g. 'npr.org')"
     )
 
-    # Source metadata
-    known_bias = models.CharField(
-        max_length=20,
-        choices=BiasRating.choices,
-        default=BiasRating.CENTER
-    )
     is_active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
@@ -95,6 +80,9 @@ class Article(TimestampedModel):
         db_index=True,
         help_text="True if this article is a republished wire service story (AP, Reuters, AFP, etc.)"
     )
+
+    # Image
+    image_url = models.URLField(blank=True, default='', max_length=2000)
 
     # Event Registry metadata
     event_registry_uri = models.CharField(

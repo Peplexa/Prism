@@ -1,9 +1,11 @@
 """Celery tasks for fetching events and articles from Event Registry."""
 
 import logging
+import os
 from datetime import timedelta
 
 from celery import shared_task
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.text import slugify
@@ -12,6 +14,35 @@ from .models import Source, Article
 from apps.topics.models import Topic, ArticleCluster
 
 logger = logging.getLogger(__name__)
+
+
+def _download_topic_image(url: str, slug: str) -> str:
+    """Download an image URL and save locally. Returns the static path."""
+    try:
+        import httpx
+        resp = httpx.get(url, timeout=10, follow_redirects=True)
+        if resp.status_code != 200:
+            return url  # fallback to external URL
+
+        ct = resp.headers.get('content-type', '')
+        ext = 'jpg'
+        if 'png' in ct:
+            ext = 'png'
+        elif 'webp' in ct:
+            ext = 'webp'
+
+        img_dir = os.path.join(settings.BASE_DIR, 'static', 'images', 'topics')
+        os.makedirs(img_dir, exist_ok=True)
+
+        filename = f'{slug[:50]}.{ext}'
+        filepath = os.path.join(img_dir, filename)
+        with open(filepath, 'wb') as f:
+            f.write(resp.content)
+
+        return f'/static/images/topics/{filename}'
+    except Exception as e:
+        logger.warning(f"Failed to download topic image: {e}")
+        return url  # fallback to external URL
 
 
 def _get_or_create_topic(event_data):
@@ -89,23 +120,30 @@ def fetch_events(self):
     new_count = 0
     skipped_count = 0
 
+    update_count = 0
+
     for event in events:
         event_uri = event.get("uri", "")
         if not event_uri:
             skipped_count += 1
             continue
 
-        # Skip events we already have
-        if Topic.objects.filter(event_registry_uri=event_uri).exists():
-            skipped_count += 1
+        existing_topic = Topic.objects.filter(event_registry_uri=event_uri).first()
+        if existing_topic:
+            # Queue update for existing topic (will ingest any new articles)
+            fetch_event_articles.delay(event_uri, existing_topic.id, False, event)
+            update_count += 1
             continue
 
-        # Pass full event data so topic is created only when articles exist
+        # New event — queue article fetching (topic created on first articles)
         fetch_event_articles.delay(event_uri, None, False, event)
         new_count += 1
 
-    logger.info(f"Fetched events: {new_count} new, {skipped_count} existing")
-    return f"{new_count} new events, {skipped_count} skipped"
+    logger.info(
+        f"Fetched events: {new_count} new, {update_count} updates, "
+        f"{skipped_count} skipped"
+    )
+    return f"{new_count} new, {update_count} updates, {skipped_count} skipped"
 
 
 @shared_task(bind=True, max_retries=3)
@@ -114,7 +152,7 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
     Fetch articles for a specific event from Event Registry.
 
     Ingests articles from all English-language sources. Sources not yet
-    in the database are auto-created with known_bias='center'.
+    in the database are auto-created.
 
     The topic is created lazily: if topic_id is None, the topic is only
     created after confirming Event Registry has articles for this event.
@@ -165,6 +203,7 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
             return
 
     new_count = 0
+    new_article_ids = []
     rank = 0
 
     for article_data in articles:
@@ -218,6 +257,7 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
             author_names = [a.get("name", "") for a in authors if isinstance(a, dict)]
             author = ", ".join(n for n in author_names if n)[:300]
 
+        image_url = (article_data.get("image", "") or "")[:2000]
         sim_score = article_data.get("sim", 0.0) or 0.0
 
         # Detect wire service republication
@@ -237,6 +277,7 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
                     event_registry_uri=er_article_uri if er_article_uri else None,
                     sentiment=sentiment,
                     is_wire_content=wire_flag,
+                    image_url=image_url,
                 )
 
                 ArticleCluster.objects.create(
@@ -246,13 +287,7 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
                     cluster_rank=rank,
                 )
 
-                # Queue analysis only after article is committed to DB
-                from apps.analysis.tasks import analyze_article
-                article_id = article.id
-                if sync:
-                    transaction.on_commit(lambda aid=article_id: analyze_article(aid))
-                else:
-                    transaction.on_commit(lambda aid=article_id: analyze_article.delay(aid))
+                new_article_ids.append(article.id)
         except IntegrityError:
             # Article URL already exists (concurrent worker created it) — skip
             continue
@@ -260,8 +295,34 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
         rank += 1
         new_count += 1
 
-    # Update topic metrics
+    # Analyze articles (parallel in sync mode, queued in async mode)
+    from apps.analysis.tasks import analyze_article
+    if sync and new_article_ids:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        max_workers = min(len(new_article_ids), os.cpu_count() or 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(analyze_article, aid): aid for aid in new_article_ids}
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Analysis failed for article {futures[future]}: {e}")
+    else:
+        for aid in new_article_ids:
+            analyze_article.delay(aid)
+
+    # Update topic metrics and image
     topic.update_metrics()
+    if not topic.image_url:
+        first_image = (
+            Article.objects.filter(cluster__topic=topic, image_url__gt='')
+            .order_by('published_at')
+            .values_list('image_url', flat=True)
+            .first()
+        )
+        if first_image:
+            topic.image_url = _download_topic_image(first_image, topic.slug)
+            topic.save(update_fields=['image_url'])
 
     logger.info(f"Event {event_uri}: ingested {new_count} articles")
     return f"{new_count} articles ingested for event {event_uri}"

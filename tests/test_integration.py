@@ -17,19 +17,19 @@ from apps.summary.models import NeutralSummary
 
 @pytest.fixture
 def diverse_sources(db):
-    """Create 4 sources with different biases."""
+    """Create 4 sources."""
     return [
         Source.objects.create(
             name=name, slug=slug,
             website_url=f'https://www.{uri}',
             event_registry_uri=uri,
-            known_bias=bias, is_active=True,
+            is_active=True,
         )
-        for name, slug, uri, bias in [
-            ('NPR', 'int-npr', 'int-npr.org', 'center_left'),
-            ('Reuters', 'int-reuters', 'int-reuters.com', 'center'),
-            ('Fox News', 'int-fox', 'int-foxnews.com', 'right'),
-            ('BBC News', 'int-bbc', 'int-bbc.co.uk', 'center'),
+        for name, slug, uri in [
+            ('NPR', 'int-npr', 'int-npr.org'),
+            ('Reuters', 'int-reuters', 'int-reuters.com'),
+            ('Fox News', 'int-fox', 'int-foxnews.com'),
+            ('BBC News', 'int-bbc', 'int-bbc.co.uk'),
         ]
     ]
 
@@ -185,7 +185,7 @@ class TestFullPipelineIntegration:
         source = Source.objects.create(
             name='Solo', slug='solo',
             website_url='https://solo.com',
-            known_bias='center', is_active=True,
+            is_active=True,
         )
         article = Article.objects.create(
             source=source,

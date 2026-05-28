@@ -172,7 +172,6 @@ class TopicOmissionAPIView(APIView):
         for score in scores:
             score_data = serializer_class(score).data
             score_data['source_name'] = score.article.source.name
-            score_data['known_bias'] = score.article.source.known_bias
             results.append(score_data)
 
         return Response({

@@ -4,11 +4,9 @@ from apps.analysis.models import ArticleAnalysis
 
 
 class SourceMinimalSerializer(serializers.ModelSerializer):
-    bias_label = serializers.CharField(source='get_known_bias_display', read_only=True)
-
     class Meta:
         model = Source
-        fields = ['id', 'name', 'slug', 'known_bias', 'bias_label', 'logo_url']
+        fields = ['id', 'name', 'slug', 'logo_url']
 
 
 class SourceSerializer(SourceMinimalSerializer):

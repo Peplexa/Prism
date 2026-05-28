@@ -28,6 +28,7 @@ class SemanticMatcher:
     """Matches extracted nuggets to ground truth using semantic similarity."""
 
     _model_cache: dict = {}
+    _model_lock = __import__('threading').Lock()
 
     def __init__(
         self,
@@ -40,22 +41,25 @@ class SemanticMatcher:
 
     @classmethod
     def _get_model(cls, model_name: str):
-        """Get or create cached sentence transformer model."""
-        if model_name not in cls._model_cache:
-            # Block torchvision (incompatible with torch 2.10.0)
-            import importlib.util
-            _orig = importlib.util.find_spec
-            def _no_tv(name, *a, **kw):
-                if name == 'torchvision' or name.startswith('torchvision.'):
-                    return None
-                return _orig(name, *a, **kw)
-            importlib.util.find_spec = _no_tv
-            try:
-                from sentence_transformers import SentenceTransformer
-            finally:
-                importlib.util.find_spec = _orig
-            logger.info(f"Loading sentence transformer: {model_name}")
-            cls._model_cache[model_name] = SentenceTransformer(model_name)
+        """Get or create cached sentence transformer model (thread-safe)."""
+        if model_name in cls._model_cache:
+            return cls._model_cache[model_name]
+        with cls._model_lock:
+            if model_name not in cls._model_cache:
+                # Block torchvision (incompatible with torch 2.10.0)
+                import importlib.util
+                _orig = importlib.util.find_spec
+                def _no_tv(name, *a, **kw):
+                    if name == 'torchvision' or name.startswith('torchvision.'):
+                        return None
+                    return _orig(name, *a, **kw)
+                importlib.util.find_spec = _no_tv
+                try:
+                    from sentence_transformers import SentenceTransformer
+                finally:
+                    importlib.util.find_spec = _orig
+                logger.info(f"Loading sentence transformer: {model_name}")
+                cls._model_cache[model_name] = SentenceTransformer(model_name)
         return cls._model_cache[model_name]
 
     def match(

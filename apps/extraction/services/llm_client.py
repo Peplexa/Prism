@@ -190,7 +190,7 @@ class DeepSeekClient(BaseLLMClient):
                 "DeepSeek API key required. Set DEEPSEEK_API_KEY in settings or .env"
             )
 
-        self.model = model or getattr(settings, 'DEEPSEEK_MODEL', 'deepseek-chat')
+        self.model = model or getattr(settings, 'DEEPSEEK_MODEL', 'deepseek-reasoner')
         self.base_url = base_url or getattr(
             settings, 'DEEPSEEK_BASE_URL', 'https://api.deepseek.com'
         )

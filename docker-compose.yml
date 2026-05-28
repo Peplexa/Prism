@@ -51,7 +51,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: celery -A config worker -l INFO --concurrency=2
+    command: celery -A config worker -l INFO --concurrency=6
     volumes:
       - .:/app
     environment:
