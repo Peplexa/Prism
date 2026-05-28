@@ -382,6 +382,20 @@ def flag_wire_duplicates(threshold=0.7):
 
     newly_flagged = 0
     topics_with_dups = 0
+    byline_backfilled = 0
+
+    # Step A: byline backfill — catches articles ingested before any pattern
+    # update (e.g. when "Canadian Press" was added). Cheap pass, no MinHash.
+    candidates = (
+        Article.objects.filter(is_wire_content=False)
+        .exclude(author='')
+        .select_related('source')
+    )
+    for a in candidates.iterator():
+        if is_wire_copy(a.author, a.source.event_registry_uri or ''):
+            a.is_wire_content = True
+            a.save(update_fields=['is_wire_content'])
+            byline_backfilled += 1
 
     for topic in Topic.objects.iterator():
         articles = list(
@@ -469,10 +483,11 @@ def flag_wire_duplicates(threshold=0.7):
                         topics_with_dups_counted = True
 
     logger.info(
-        f"Wire-dedup pass (threshold={threshold}): flagged {newly_flagged} "
+        f"Wire-dedup pass (threshold={threshold}): byline backfill="
+        f"{byline_backfilled}, content dedup={newly_flagged} "
         f"new articles across {topics_with_dups} topics"
     )
-    return f"Flagged {newly_flagged} articles"
+    return f"Flagged {byline_backfilled + newly_flagged} articles"
 
 
 @shared_task
