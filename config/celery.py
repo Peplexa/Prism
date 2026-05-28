@@ -14,6 +14,12 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Load task modules from all registered Django apps.
 app.autodiscover_tasks()
 
+# Route analyze_article to its own queue so CPU-bound transformer inference
+# doesn't starve I/O-bound DeepSeek work on the main worker.
+app.conf.task_routes = {
+    'apps.analysis.tasks.analyze_article': {'queue': 'analysis'},
+}
+
 # Celery Beat schedule
 app.conf.beat_schedule = {
     # Poll Event Registry for new events every 5 minutes

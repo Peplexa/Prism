@@ -51,7 +51,23 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: celery -A config worker -l INFO --concurrency=6
+    command: celery -A config worker -l INFO -Q celery --concurrency=4
+    volumes:
+      - .:/app
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.local
+      - DATABASE_URL=postgres://prism:${DB_PASSWORD:-prism_dev_password}@db:5432/prism
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+
+  celery_worker_analysis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: celery -A config worker -l INFO -Q analysis --concurrency=3
     volumes:
       - .:/app
     environment:

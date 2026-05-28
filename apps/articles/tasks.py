@@ -264,6 +264,8 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
         from apps.articles.utils import is_wire_copy
         wire_flag = is_wire_copy(author, source_uri)
 
+        from apps.analysis.tasks import analyze_article
+
         try:
             with transaction.atomic():
                 article = Article.objects.create(
@@ -288,6 +290,13 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
                 )
 
                 new_article_ids.append(article.id)
+
+                # Queue analysis on commit so the worker sees the row
+                if not sync:
+                    article_id = article.id
+                    transaction.on_commit(
+                        lambda aid=article_id: analyze_article.delay(aid)
+                    )
         except IntegrityError:
             # Article URL already exists (concurrent worker created it) — skip
             continue
@@ -295,8 +304,7 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
         rank += 1
         new_count += 1
 
-    # Analyze articles (parallel in sync mode, queued in async mode)
-    from apps.analysis.tasks import analyze_article
+    # Sync-mode analysis: parallel via thread pool (single-process)
     if sync and new_article_ids:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         max_workers = min(len(new_article_ids), os.cpu_count() or 4)
@@ -307,9 +315,6 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
                     future.result()
                 except Exception as e:
                     logger.error(f"Analysis failed for article {futures[future]}: {e}")
-    else:
-        for aid in new_article_ids:
-            analyze_article.delay(aid)
 
     # Update topic metrics and image
     topic.update_metrics()
