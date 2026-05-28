@@ -351,10 +351,21 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
 
 
 @shared_task
-def flag_wire_duplicates(threshold=0.8):
+def flag_wire_duplicates(threshold=0.7):
     """
     Detect near-duplicate articles within each topic via MinHash / LSH
     and flag them as wire content.
+
+    Two-step:
+    1) Group articles into connected components by Jaccard >= threshold.
+    2) For each component of size >= 2:
+         - If ANY article in the component has a wire byline (or was already
+           flagged by the ingest-time byline check), flag ALL articles in
+           the component as wire — fixes the "first-published wins" bug
+           where the earliest-republished copy was being treated as the
+           original.
+         - Otherwise, leave the earliest-published article unflagged and
+           flag the rest.
 
     Catches outlets that republish wire copy (verbatim or lightly edited)
     but strip the wire-service byline. Complements the byline-based check
@@ -366,6 +377,7 @@ def flag_wire_duplicates(threshold=0.8):
         MINHASH_NUM_PERM,
         MINHASH_SHINGLE_SIZE,
         article_minhash,
+        is_wire_copy,
     )
 
     newly_flagged = 0
@@ -375,39 +387,90 @@ def flag_wire_duplicates(threshold=0.8):
         articles = list(
             Article.objects
             .filter(cluster__topic=topic)
+            .select_related('source')
             .exclude(content='')
             .order_by('published_at', 'id')
         )
         if len(articles) < 2:
             continue
 
+        # Compute MinHash signatures and build LSH
+        signatures = {}
         lsh = MinHashLSH(threshold=threshold, num_perm=MINHASH_NUM_PERM)
-        saw_dup = False
-
-        for article in articles:
+        for a in articles:
             mh = article_minhash(
-                article.content,
+                a.content,
                 num_perm=MINHASH_NUM_PERM,
                 shingle_size=MINHASH_SHINGLE_SIZE,
             )
             if mh is None:
                 continue
+            signatures[a.id] = mh
+            lsh.insert(str(a.id), mh)
 
-            if lsh.query(mh):
-                saw_dup = True
-                if not article.is_wire_content:
-                    article.is_wire_content = True
-                    article.save(update_fields=['is_wire_content'])
+        # Union-find over similarity edges
+        parent = {a.id: a.id for a in articles if a.id in signatures}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(x, y):
+            rx, ry = find(x), find(y)
+            if rx != ry:
+                parent[rx] = ry
+
+        for a in articles:
+            if a.id not in signatures:
+                continue
+            matches = lsh.query(signatures[a.id])
+            for m in matches:
+                m_id = int(m)
+                if m_id != a.id and m_id in parent:
+                    union(a.id, m_id)
+
+        # Group into components
+        components = {}
+        for aid in parent:
+            root = find(aid)
+            components.setdefault(root, []).append(aid)
+
+        article_by_id = {a.id: a for a in articles}
+
+        for root, member_ids in components.items():
+            if len(member_ids) < 2:
+                continue
+            topics_with_dups_counted = False
+            members = [article_by_id[aid] for aid in member_ids]
+            members.sort(key=lambda a: (a.published_at, a.id))
+
+            # Does any member have a wire byline?
+            has_wire_byline = any(
+                a.is_wire_content or is_wire_copy(a.author, '')
+                for a in members
+            )
+
+            if has_wire_byline:
+                # Wire copy detected — every member is a republication
+                to_flag = members
+            else:
+                # No byline signal — keep earliest as "original", flag the rest
+                to_flag = members[1:]
+
+            for a in to_flag:
+                if not a.is_wire_content:
+                    a.is_wire_content = True
+                    a.save(update_fields=['is_wire_content'])
                     newly_flagged += 1
-
-            lsh.insert(str(article.id), mh)
-
-        if saw_dup:
-            topics_with_dups += 1
+                    if not topics_with_dups_counted:
+                        topics_with_dups += 1
+                        topics_with_dups_counted = True
 
     logger.info(
-        f"Wire-dedup pass: flagged {newly_flagged} new articles "
-        f"across {topics_with_dups} topics"
+        f"Wire-dedup pass (threshold={threshold}): flagged {newly_flagged} "
+        f"new articles across {topics_with_dups} topics"
     )
     return f"Flagged {newly_flagged} articles"
 
