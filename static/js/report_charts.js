@@ -9,6 +9,12 @@ document.addEventListener('DOMContentLoaded', function () {
     // Dark theme defaults
     Chart.defaults.color = '#a3a3a3';
     Chart.defaults.borderColor = '#333';
+    // Force the canvas backing buffer to render at the device's pixel ratio
+    // (at least 2x). Chart.js usually picks this up from window.devicePixelRatio,
+    // but on some Windows/HiDPI configs the auto-detection captures 1 when
+    // the chart is initialized inside a recently-revealed container, leaving
+    // text and tick labels rasterized at 1x then CSS-stretched (blurry).
+    Chart.defaults.devicePixelRatio = Math.max(window.devicePixelRatio || 1, 2);
 
     // ============================================
     // Summary Table Sorting (visible from page load — safe to init now)

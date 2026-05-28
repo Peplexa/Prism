@@ -1470,10 +1470,14 @@ function toggleSection(id) {
         content.style.display = 'block';
         if (icon) icon.classList.add('open');
         // Lazy-init detail charts on first reveal so Chart.js measures the
-        // canvas at the correct rendered size (otherwise it bakes a default
-        // size while display:none and CSS-stretches to fit, which looks blurry).
+        // canvas at the correct rendered size. Defer one animation frame so
+        // the browser has actually completed layout — initializing inside
+        // the same tick can capture stale 0-sized dimensions or a stale
+        // devicePixelRatio, both of which produce blurry text.
         if (id === 'detail-charts' && typeof window.initDetailCharts === 'function') {
-            window.initDetailCharts();
+            requestAnimationFrame(function () {
+                requestAnimationFrame(window.initDetailCharts);
+            });
         }
         // Resize any already-initialized charts in case container width changed
         window.dispatchEvent(new Event('resize'));
