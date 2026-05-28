@@ -63,6 +63,12 @@ app.conf.beat_schedule = {
         'task': 'apps.summary.tasks.generate_missing_summaries',
         'schedule': crontab(minute=15),
     },
+
+    # Flag near-duplicate wire-copy articles via MinHash LSH (every 15 min)
+    'flag-wire-duplicates': {
+        'task': 'apps.articles.tasks.flag_wire_duplicates',
+        'schedule': crontab(minute='*/15'),
+    },
 }
 
 

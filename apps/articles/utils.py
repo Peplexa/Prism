@@ -14,6 +14,14 @@ WIRE_SERVICE_PATTERNS = [
     r'\bAgence France[- ]Presse\b',
     r'\bUnited Press International\b',
     r'\bUPI\b',
+    r'\bCanadian Press\b',
+    r'\bThe Canadian Press\b',
+    r'\bPress Association\b',
+    r'\bPress Trust of India\b',
+    r'\bPTI\b',
+    r'\bIANS\b',
+    r'\bANI\b',
+    r'\bdpa\b',
 ]
 
 # Source URIs that ARE wire services (originals, not copies)

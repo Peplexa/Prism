@@ -351,6 +351,68 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
 
 
 @shared_task
+def flag_wire_duplicates(threshold=0.8):
+    """
+    Detect near-duplicate articles within each topic via MinHash / LSH
+    and flag them as wire content.
+
+    Catches outlets that republish wire copy (verbatim or lightly edited)
+    but strip the wire-service byline. Complements the byline-based check
+    in fetch_event_articles which runs at ingest time.
+    """
+    from datasketch import MinHashLSH
+    from apps.articles.models import Article
+    from apps.articles.utils import (
+        MINHASH_NUM_PERM,
+        MINHASH_SHINGLE_SIZE,
+        article_minhash,
+    )
+
+    newly_flagged = 0
+    topics_with_dups = 0
+
+    for topic in Topic.objects.iterator():
+        articles = list(
+            Article.objects
+            .filter(cluster__topic=topic)
+            .exclude(content='')
+            .order_by('published_at', 'id')
+        )
+        if len(articles) < 2:
+            continue
+
+        lsh = MinHashLSH(threshold=threshold, num_perm=MINHASH_NUM_PERM)
+        saw_dup = False
+
+        for article in articles:
+            mh = article_minhash(
+                article.content,
+                num_perm=MINHASH_NUM_PERM,
+                shingle_size=MINHASH_SHINGLE_SIZE,
+            )
+            if mh is None:
+                continue
+
+            if lsh.query(mh):
+                saw_dup = True
+                if not article.is_wire_content:
+                    article.is_wire_content = True
+                    article.save(update_fields=['is_wire_content'])
+                    newly_flagged += 1
+
+            lsh.insert(str(article.id), mh)
+
+        if saw_dup:
+            topics_with_dups += 1
+
+    logger.info(
+        f"Wire-dedup pass: flagged {newly_flagged} new articles "
+        f"across {topics_with_dups} topics"
+    )
+    return f"Flagged {newly_flagged} articles"
+
+
+@shared_task
 def cleanup_old_topics(days_old=30):
     """Remove topics older than N days with no recent articles."""
     cutoff = timezone.now() - timedelta(days=days_old)
