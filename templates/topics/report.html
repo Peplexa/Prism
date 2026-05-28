@@ -117,6 +117,25 @@
         border-bottom: 1px solid var(--color-border);
         margin-bottom: 2rem;
     }
+    .report-hero {
+        height: 240px;
+        background-size: cover;
+        background-position: center;
+        background-color: var(--color-bg);
+        border-radius: var(--radius);
+        margin-bottom: 1.5rem;
+        position: relative;
+    }
+    .report-hero::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, rgba(0,0,0,0) 40%, rgba(0,0,0,0.55) 100%);
+        border-radius: var(--radius);
+    }
+    @media (max-width: 768px) {
+        .report-hero { height: 160px; }
+    }
     .report-badge {
         display: inline-block;
         background: var(--color-primary);
@@ -822,6 +841,9 @@
 <div class="container">
     <!-- Report Header -->
     <header class="report-header">
+        {% if topic.image_url %}
+        <div class="report-hero" style="background-image: url('{{ topic.image_url }}');" role="img" aria-label="{{ topic.title }}"></div>
+        {% endif %}
         <span class="report-badge">Media Comparison Report</span>
         <h1>{{ topic.title }}</h1>
         <div class="topic-stats mt-2">
