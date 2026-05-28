@@ -24,7 +24,7 @@ services:
       retries: 3
 
   celery_worker:
-    command: celery -A config worker -l INFO --concurrency=4
+    command: celery -A config worker -l INFO --concurrency=6
     volumes: []
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.production
