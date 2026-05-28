@@ -734,19 +734,22 @@ class NuggetPostProcessor:
             return len(contradictions)
 
         # Process verdicts — delete rejected contradictions.
-        # Also apply a deterministic safety net: if the two claim texts have
-        # token-Jaccard > 0.7, the visible disagreement (if any) is too
-        # subtle for a reader to perceive, so reject even if the LLM
-        # confirmed. Catches "5.7 ypc" vs "5.7 ypc" style false positives
+        # Also apply a deterministic safety net: if the two claim texts are
+        # near-identical (token-Jaccard > 0.85), reject even if the LLM
+        # confirmed. Catches "5.7 ypc" vs "5.7 ypc"-style false positives
         # where the underlying nuggets differed but the merged display text
-        # collapsed back to identical wording.
+        # collapsed to identical wording.
+        # Set high (0.85, not 0.7) so genuine short-claim contradictions
+        # like "Stage 17 was 200 km" vs "Stage 17 was 202 km" (Jaccard ~0.71)
+        # survive — they share a lot of vocabulary but the differing number
+        # is real and reader-visible.
         verified = 0
         for i, c in enumerate(contradictions):
             llm_confirms = i < len(verdicts) and verdicts[i] == 'confirm'
             text_sim = _token_jaccard(
                 c.nugget_a.nugget_text, c.nugget_b.nugget_text
             )
-            too_similar = text_sim > 0.7
+            too_similar = text_sim > 0.85
 
             if llm_confirms and not too_similar:
                 verified += 1
