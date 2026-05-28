@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 def _download_topic_image(url: str, slug: str) -> str:
-    """Download an image URL and save locally. Returns the static path."""
+    """Download an image URL and save locally. Returns the static path, or '' on failure."""
     try:
         import httpx
         resp = httpx.get(url, timeout=10, follow_redirects=True)
-        if resp.status_code != 200:
-            return url  # fallback to external URL
+        if resp.status_code != 200 or not resp.content:
+            return ''
 
         ct = resp.headers.get('content-type', '')
         ext = 'jpg'
@@ -41,8 +41,8 @@ def _download_topic_image(url: str, slug: str) -> str:
 
         return f'/static/images/topics/{filename}'
     except Exception as e:
-        logger.warning(f"Failed to download topic image: {e}")
-        return url  # fallback to external URL
+        logger.warning(f"Failed to download topic image from {url[:80]}: {e}")
+        return ''
 
 
 def _get_or_create_topic(event_data):
@@ -318,16 +318,25 @@ def fetch_event_articles(self, event_uri, topic_id=None, sync=False, event_data=
 
     # Update topic metrics and image
     topic.update_metrics()
-    if not topic.image_url:
-        first_image = (
+    # Re-attempt if image is missing OR is a stale external URL from a prior
+    # failed download (some publishers' image hosts go down between fetches).
+    if not topic.image_url or not topic.image_url.startswith('/static/'):
+        candidates = (
             Article.objects.filter(cluster__topic=topic, image_url__gt='')
             .order_by('published_at')
-            .values_list('image_url', flat=True)
-            .first()
+            .values_list('image_url', flat=True)[:5]
         )
-        if first_image:
-            topic.image_url = _download_topic_image(first_image, topic.slug)
-            topic.save(update_fields=['image_url'])
+        for url in candidates:
+            local_path = _download_topic_image(url, topic.slug)
+            if local_path:
+                topic.image_url = local_path
+                topic.save(update_fields=['image_url'])
+                break
+        else:
+            # All candidates failed — clear any stale URL so the card stays clean
+            if topic.image_url and not topic.image_url.startswith('/static/'):
+                topic.image_url = ''
+                topic.save(update_fields=['image_url'])
 
     logger.info(f"Event {event_uri}: ingested {new_count} articles")
     return f"{new_count} articles ingested for event {event_uri}"
