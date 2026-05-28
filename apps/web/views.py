@@ -205,6 +205,14 @@ class TopicReportView(DetailView):
             .select_related('source')
             .order_by('source__name', '-published_at')
         )
+        # Split into original reporting vs wire-copy republication for grouped
+        # display in the Source Articles section.
+        context['original_articles'] = [
+            a for a in context['source_articles'] if not a.is_wire_content
+        ]
+        context['wire_articles'] = [
+            a for a in context['source_articles'] if a.is_wire_content
+        ]
 
         # Publication timeline — deduplicate by source (keep earliest)
         timeline_articles = sorted(
