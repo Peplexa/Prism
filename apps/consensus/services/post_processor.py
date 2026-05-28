@@ -86,11 +86,15 @@ fold them into the most compatible group rather than making a separate group.
 
 Output ONLY a JSON array of objects, one per cluster, same order:
 [{{"status": "agree"}}, {{"status": "contradict", "groups": [[0, 2], [1, 3]], \
-"explanation": "Members 0,2 say 12 killed while members 1,3 say 8 killed"}}]
+"explanation": "Reuters and AP say 12 killed while CNN and BBC say 8 killed"}}]
 
 In "groups", list the 0-indexed member positions that agree with each other. \
 Every member must appear in exactly one group. The first group should be the \
-sub-group with more members (or alphabetically first source if tied)."""
+sub-group with more members (or alphabetically first source if tied).
+
+In "explanation", refer to sources BY NAME (e.g. "Reuters", "WPLG") using the \
+[Source Name] tags in each member line. Never use "Member 0" or "Source 2" — \
+end users see this text and need readable source attribution."""
 
 CONTRADICTION_USER_TEMPLATE = """\
 Event: {topic_title}
@@ -104,25 +108,37 @@ Check each cluster for internal contradictions. Return a JSON array, one entry p
 
 
 VERIFY_SYSTEM_PROMPT = """\
-You are a strict fact verification expert. You are given pairs of claims that were flagged \
-as potentially contradictory. Your job is to VERIFY whether each pair is a genuine contradiction.
+You are a strict fact verification expert. You are given pairs of claim texts \
+that were flagged as potentially contradictory. Your job is to VERIFY whether \
+the TWO CLAIM TEXTS THEMSELVES are mutually exclusive as written.
 
-A genuine contradiction means the two claims are MUTUALLY EXCLUSIVE — both CANNOT be true \
-at the same time. Be strict. Only confirm real contradictions.
+The cardinal rule: judge the visible text. A reader sees only the two claim \
+texts you are given. Could a careful reader believe BOTH claims simultaneously? \
+If yes, REJECT — no matter what reasoning a previous step gave for flagging it.
 
 NOT contradictions (reject these):
-- Synonyms or paraphrases: "agreement" vs "deal" — SAME THING
-- Different detail levels: "Pakistan" vs "Islamabad, Pakistan" — SAME THING
-- Name variants: "Zelenskyy" vs "Volodymyr Zelenskyy" — SAME THING
-- Tense differences: "has met" vs "will meet" — NOT a contradiction
-- Vague vs specific that could match: "Monday" vs "April 14" if Monday was April 14 — NOT a contradiction
-- Complementary facts from the same list — NOT a contradiction
+- Identical-looking claims: "5.7 yards per carry" vs "5.7 yards per carry" — \
+  even if the prompt context suggests an underlying disagreement, if both \
+  visible texts say the same thing, REJECT.
+- Tense differences: "was not a full participant" vs "has not been a full \
+  participant" — REJECT.
+- Different specificity, compatible content: "four-year contract extension" \
+  vs "four-year, $64 million extension" — the second is a superset, both \
+  can be true, REJECT.
+- Synonyms or paraphrases: "agreement" vs "deal" — REJECT.
+- Different detail levels: "Pakistan" vs "Islamabad, Pakistan" — REJECT.
+- Name variants: "Zelenskyy" vs "Volodymyr Zelenskyy" — REJECT.
+- Vague vs specific that could match: "Monday" vs "April 14" if Monday was \
+  April 14 — REJECT.
+- Complementary facts from the same list — REJECT.
 
-REAL contradictions (confirm these):
-- Different numbers for same metric: "12 killed" vs "8 killed"
-- Opposite outcomes: "passed" vs "failed"
-- Directly opposing: "approved" vs "rejected"
-- Different specific dates: "April 13" vs "April 14"
+REAL contradictions (confirm these) — the disagreement must be VISIBLE IN \
+THE CLAIM TEXTS, not described in some prior explanation:
+- Different specific numbers visible in both texts for the same metric: \
+  "12 killed" vs "8 killed".
+- Opposite outcomes visible in both texts: "passed" vs "failed".
+- Directly opposing words visible in both texts: "approved" vs "rejected".
+- Different specific dates visible in both texts: "April 13" vs "April 14".
 
 For each pair, output "confirm" or "reject".
 Output ONLY a JSON array of strings: ["confirm", "reject", "confirm", ...]"""
@@ -223,6 +239,57 @@ def _build_date_reference():
         marker = " (today)" if d == today else ""
         lines.append(f"{d.strftime('%A')} = {d.strftime('%B %d, %Y')}{marker}")
     return "\n".join(lines)
+
+
+_INDEX_REF_RE = re.compile(
+    r'\b(?:Members?|Sources?)\s+(\d+(?:\s*(?:,|and)\s*\d+)*)\b',
+    re.IGNORECASE,
+)
+_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
+
+
+def _substitute_source_indices(explanation: str, sources: list[str]) -> str:
+    """Replace "Source 0", "Members 1 and 3" etc with actual source names.
+
+    Belt-and-suspenders alongside the prompt instruction telling the LLM to
+    use source names directly. If the LLM still emits "Source N" references,
+    look up the corresponding source name and substitute it in.
+    """
+    if not explanation or not sources:
+        return explanation
+
+    def replace(match):
+        idx_text = match.group(1)
+        # Split on comma or "and"
+        idx_parts = re.split(r'\s*(?:,|and)\s*', idx_text)
+        names = []
+        for part in idx_parts:
+            try:
+                i = int(part)
+                if 0 <= i < len(sources):
+                    names.append(sources[i])
+            except ValueError:
+                pass
+        if not names:
+            return match.group(0)
+        if len(names) == 1:
+            return names[0]
+        if len(names) == 2:
+            return f"{names[0]} and {names[1]}"
+        return ", ".join(names[:-1]) + f", and {names[-1]}"
+
+    return _INDEX_REF_RE.sub(replace, explanation)
+
+
+def _token_jaccard(a: str, b: str) -> float:
+    """Token-set Jaccard similarity of two strings (lowercased, alphanumeric)."""
+    ta = set(_TOKEN_RE.findall(a.lower()))
+    tb = set(_TOKEN_RE.findall(b.lower()))
+    if not ta and not tb:
+        return 1.0
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
 
 
 @dataclass
@@ -425,10 +492,20 @@ class NuggetPostProcessor:
     ) -> list[dict | None]:
         """Check a batch of clusters for contradictions via LLM."""
         cluster_lines = []
-        for i, (cn, raw_texts) in enumerate(batch, 1):
+        # Per-cluster source names indexed the same way as the prompt's member ids
+        cluster_source_names: list[list[str]] = []
+        for i, (cn, _raw_texts) in enumerate(batch, 1):
+            # Fetch raw nuggets with their source names, ordered by id (stable)
+            raw_with_sources = list(
+                cn.raw_nuggets
+                .select_related('article__source')
+                .order_by('id')
+                .values_list('nugget_text', 'article__source__name')
+            )
+            cluster_source_names.append([src for (_, src) in raw_with_sources])
             members = "\n".join(
-                f'  {j}) "{text}"'
-                for j, text in enumerate(raw_texts)
+                f'  {j}) [{src}] "{text}"'
+                for j, (text, src) in enumerate(raw_with_sources)
             )
             cluster_lines.append(
                 f"Cluster {i} ({cn.source_count} sources):\n{members}"
@@ -448,12 +525,24 @@ class NuggetPostProcessor:
                 temperature=0.1,
                 max_tokens=4096,
             )
-            return self._parse_contradiction_response(response, len(batch))
+            results = self._parse_contradiction_response(response, len(batch))
         except Exception as e:
             logger.warning(
                 f"Contradiction check failed, assuming no contradictions: {e}"
             )
             return [None] * len(batch)
+
+        # Post-process: rewrite any "Member N" / "Source N" references in the
+        # explanation with the actual source name. Belt-and-suspenders alongside
+        # the prompt instruction (the LLM still slips into index references).
+        for cluster_idx, result in enumerate(results):
+            if not result or result.get('status') != 'contradict':
+                continue
+            sources = cluster_source_names[cluster_idx]
+            result['explanation'] = _substitute_source_indices(
+                result.get('explanation', ''), sources
+            )
+        return results
 
     @classmethod
     def _parse_contradiction_response(
@@ -611,14 +700,18 @@ class NuggetPostProcessor:
         if not contradictions:
             return 0
 
-        # Build pairs block for verification
+        # Build pairs block for verification.
+        # Deliberately omit the upstream "Flagged because" explanation — the
+        # verifier should judge purely from the visible claim texts, not be
+        # primed by the first pass's interpretation (which is what was letting
+        # false positives like tense diffs and identical-looking texts slip
+        # through).
         pairs = []
         for i, c in enumerate(contradictions, 1):
             pairs.append(
                 f"Pair {i}:\n"
                 f'  A) "{c.nugget_a.nugget_text}"\n'
-                f'  B) "{c.nugget_b.nugget_text}"\n'
-                f'  Flagged because: {c.explanation}'
+                f'  B) "{c.nugget_b.nugget_text}"'
             )
         pairs_block = "\n\n".join(pairs)
 
@@ -640,18 +733,28 @@ class NuggetPostProcessor:
             logger.warning(f"Verification failed, keeping all contradictions: {e}")
             return len(contradictions)
 
-        # Process verdicts — delete rejected contradictions
+        # Process verdicts — delete rejected contradictions.
+        # Also apply a deterministic safety net: if the two claim texts have
+        # token-Jaccard > 0.7, the visible disagreement (if any) is too
+        # subtle for a reader to perceive, so reject even if the LLM
+        # confirmed. Catches "5.7 ypc" vs "5.7 ypc" style false positives
+        # where the underlying nuggets differed but the merged display text
+        # collapsed back to identical wording.
         verified = 0
         for i, c in enumerate(contradictions):
-            if i < len(verdicts) and verdicts[i] == 'confirm':
+            llm_confirms = i < len(verdicts) and verdicts[i] == 'confirm'
+            text_sim = _token_jaccard(
+                c.nugget_a.nugget_text, c.nugget_b.nugget_text
+            )
+            too_similar = text_sim > 0.7
+
+            if llm_confirms and not too_similar:
                 verified += 1
             else:
-                # Rejected — delete the contradiction record
-                # (the split nuggets remain as separate consensus nuggets,
-                # which is fine — they just won't be linked as contradictions)
                 c.delete()
                 logger.debug(
-                    f"Rejected contradiction: {c.nugget_a.nugget_text[:40]} "
+                    f"Rejected contradiction (llm={'confirm' if llm_confirms else 'reject'}, "
+                    f"sim={text_sim:.2f}): {c.nugget_a.nugget_text[:40]} "
                     f"vs {c.nugget_b.nugget_text[:40]}"
                 )
 
