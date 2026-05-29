@@ -119,6 +119,11 @@ Rules:
 3. Separate compound claims into individual facts
 4. Do NOT include opinions, analysis, or editorial framing
 5. Focus on WHAT happened, not how it was described
+6. STRIP news-outlet attribution. If the article says "According to the Wall \
+Street Journal, X" or "Reuters reported that X" or "per Bloomberg, X", \
+extract just "X" — the underlying fact, not the meta-claim about who \
+broke the story. (KEEP attribution to non-press actors: officials, \
+government, scientists, courts, named people — those are part of the fact.)
 
 Output ONLY a JSON array of objects with "fact" and "type" keys.
 Types: "claim" | "statistic" | "quote" | "action" | "context" | "outcome"

@@ -38,12 +38,18 @@ If one says "scored" and another says "scored with 7:42 left in the third period
 has the full name.
 3. COMBINE complementary details. If one variant has the score context ("gave Czechia a 3-2 lead") \
 and another has the timing ("with 7:42 left"), the merged fact should include both.
-4. Keep attribution when present. If a variant says 'according to officials,' keep that.
-5. Do NOT add information that isn't in any variant. Do NOT editorialize or interpret.
-6. Do NOT start with "The." Write a direct declarative sentence.
-7. One sentence only, 8-25 words. If combining details pushes past 25 words, keep the \
+4. KEEP attribution to non-press actors. If a variant says 'according to officials' or \
+'the Pentagon said,' keep that — it's part of the fact.
+5. STRIP attribution to news outlets. If a variant says "Wall Street Journal reported that X" \
+or "according to Reuters, X" or "Bloomberg said X", the merged fact should be the underlying \
+claim X — not the meta-claim about which outlet broke the story. Otherwise every other \
+outlet covering the same story gets scored as "not supporting" the consensus claim even \
+though they're reporting the same underlying fact.
+6. Do NOT add information that isn't in any variant. Do NOT editorialize or interpret.
+7. Do NOT start with "The." Write a direct declarative sentence.
+8. One sentence only, 8-25 words. If combining details pushes past 25 words, keep the \
 most specific version and drop the least informative detail.
-8. If all variants say essentially the same thing with no complementary details, \
+9. If all variants say essentially the same thing with no complementary details, \
 pick the most precise and complete wording verbatim."""
 
 MERGE_USER_TEMPLATE = """\
