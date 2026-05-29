@@ -9,6 +9,7 @@ from django.shortcuts import redirect
 from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.cache import cache_page
+from django.views.decorators.vary import vary_on_headers
 from django.views.generic import TemplateView, DetailView, ListView
 
 from apps.analysis.models import ArticleAnalysis
@@ -49,6 +50,7 @@ class HomeView(TemplateView):
 
 
 @method_decorator(cache_page(60 * 2), name='dispatch')
+@method_decorator(vary_on_headers('HX-Request'), name='dispatch')
 class IdeasView(ListView):
     """Trending/popular topics page."""
     template_name = 'ideas/list.html'
@@ -69,6 +71,14 @@ class IdeasView(ListView):
                 output_field=IntegerField(),
             ),
         ).order_by('-has_analysis', '-trending_score', '-last_article_at')
+
+    def get_template_names(self):
+        # HTMX infinite-scroll requests get just the next page of cards
+        # (plus the next loader sentinel) so the existing grid can absorb
+        # them via hx-swap="outerHTML".
+        if self.request.headers.get('HX-Request'):
+            return ['ideas/partials/page.html']
+        return [self.template_name]
 
 
 class ArticleDetailView(DetailView):

@@ -10,39 +10,9 @@
     </header>
 
     {% if topics %}
-    <div class="topic-grid">
-        {% for topic in topics %}
-        <a href="{% url 'web:topic-detail' slug=topic.slug %}" class="topic-card">
-            {% if topic.image_url %}<div class="topic-card-img" style="background-image: url('{{ topic.image_url }}')"></div>{% endif %}
-            <div class="topic-card-body">
-                <h3>{{ topic.title }}</h3>
-                <div class="topic-meta">
-                    <span>{{ topic.article_count }} articles</span>
-                    <span>{{ topic.source_count }} sources</span>
-                </div>
-                {% if topic.keywords %}
-                <p class="text-muted mt-1" style="font-size: 0.75rem;">
-                    {{ topic.keywords|slice:":5"|join:", " }}
-                </p>
-                {% endif %}
-            </div>
-        </a>
-        {% endfor %}
+    <div class="topic-grid" id="topic-grid">
+        {% include 'ideas/partials/page.html' %}
     </div>
-
-    <!-- Pagination -->
-    {% if page_obj.has_other_pages %}
-    <nav class="pagination mt-4 text-center">
-        {% if page_obj.has_previous %}
-        <a href="?page={{ page_obj.previous_page_number }}">Previous</a>
-        {% endif %}
-        <span class="text-muted">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
-        {% if page_obj.has_next %}
-        <a href="?page={{ page_obj.next_page_number }}">Next</a>
-        {% endif %}
-    </nav>
-    {% endif %}
-
     {% else %}
     <div class="empty-state">
         <h3>No topics yet</h3>
@@ -50,4 +20,33 @@
     </div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .infinite-loader {
+        grid-column: 1 / -1;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 2rem 1rem;
+        min-height: 80px;
+    }
+    .loader-spinner {
+        width: 28px;
+        height: 28px;
+        border: 3px solid var(--color-border);
+        border-top-color: var(--color-primary, #6366f1);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .sr-only {
+        position: absolute;
+        width: 1px; height: 1px;
+        padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0,0,0,0);
+        white-space: nowrap; border: 0;
+    }
+</style>
 {% endblock %}
